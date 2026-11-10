@@ -98,12 +98,14 @@ that another source family convicts is still convicted.
 
 | Rule | Value |
 |---|---|
-| A positive result expires | 30 days after `lastReportedAt` |
+| A positive result expires | The earlier of 30 days after `lastReportedAt` and `Config::positive_ttl`, 30 days by default |
 | A negative result is reused for | `Config::negative_ttl`, 24 hours by default |
 | A report older than 30 days | Never convicts on its own |
 
 The upstream reports a point in time rather than a period, so no observation
-window is recorded.
+window is recorded. The library expires the answer at the earlier of the expiry
+the upstream declares and the host bound, so a claim is never kept for longer
+than `Config::positive_ttl`.
 
 ## Terms and attribution
 

@@ -18,7 +18,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-pub mod cache;
+mod cache;
 pub mod clock;
 pub mod config;
 pub mod engine;
@@ -32,7 +32,6 @@ pub mod quota;
 pub mod ratelimit;
 pub mod secret;
 
-pub use cache::TtlCache;
 pub use clock::{Clock, FixedClock, SystemClock};
 pub use config::{
     ABUSEIPDB_DEFAULT_BASE_URL, ABUSEIPDB_DEFAULT_DAILY_QUOTA, ABUSEIPDB_DEFAULT_MAX_AGE_DAYS,
@@ -67,10 +66,10 @@ use std::net::IpAddr;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use time::OffsetDateTime;
+use time::{Date, OffsetDateTime, Time, UtcOffset};
 use tokio::sync::Semaphore;
 
-use crate::cache::{CacheKey, Cached};
+use crate::cache::{CacheEntry, CacheKey, CacheValue, TtlCache};
 use crate::model::{is_assessable, normalize};
 use crate::provider::ProviderHealth;
 use crate::provider::lookup::ProviderRuntime;
@@ -88,7 +87,6 @@ struct Inner {
     runtimes: HashMap<ProviderId, Arc<ProviderRuntime>>,
     cache: TtlCache<ProviderVerdict>,
     health: Mutex<HashMap<ProviderId, ProviderHealth>>,
-    failures: Mutex<HashMap<CacheKey, (ProviderError, OffsetDateTime)>>,
     refreshes: Mutex<HashMap<ProviderId, OffsetDateTime>>,
     feeds: RwLock<Arc<LoadedFeeds>>,
     markers: UserAgentMarkers,
@@ -137,13 +135,18 @@ impl BadBots {
                 provider: provider.id(),
                 ip,
             };
-            if let Some(verdict) = self.inner.cache.get(&key, now) {
-                self.merge(&mut input, provider.as_ref(), &verdict);
+            match self.inner.cache.get(&key, now) {
+                Some(CacheValue::Answer(verdict)) => {
+                    self.merge(&mut input, provider.as_ref(), &verdict);
+                }
+                Some(CacheValue::Failure(error)) => {
+                    input.coverage.record_failure(provider.id(), error);
+                }
+                None => {}
             }
         }
 
         self.merge_feeds(&mut input);
-        self.merge_failures(&mut input, now);
         classify(&input, &self.inner.config, now)
     }
 
@@ -184,32 +187,31 @@ impl BadBots {
                 provider: provider.id(),
                 ip,
             };
-            let negative_ttl = self.inner.config.negative_ttl;
+            let config = &self.inner.config;
             async move {
                 let _permit = self.inner.concurrency.acquire().await.ok();
                 let result = self
                     .inner
                     .cache
-                    .get_or_fetch(key.clone(), now, || async {
+                    .get_or_fetch(key, now, || async {
                         let verdict = provider.lookup(ip).await?;
-                        let expires_at = verdict.expires_at.unwrap_or(now + negative_ttl);
-                        Ok(Cached {
+                        let expires_at = entry_expiry(&verdict, config, now);
+                        Ok(CacheEntry {
                             value: verdict,
                             expires_at,
                         })
                     })
                     .await;
-                (provider, key, result)
+                (provider, result)
             }
         });
 
-        for (provider, key, result) in futures_util::future::join_all(lookups).await {
+        for (provider, result) in futures_util::future::join_all(lookups).await {
             self.record_attempt(provider.id(), now);
 
             match result {
                 Ok(verdict) => {
                     self.record_success(provider.id(), now);
-                    self.clear_failure(&key);
                     tracing::debug!(
                         provider = %provider.id(),
                         ip = %ip,
@@ -224,7 +226,6 @@ impl BadBots {
                 }
                 Err(error) => {
                     self.record_failure(provider.id(), now, error.clone());
-                    self.record_address_failure(&key, error.clone(), now);
                     tracing::warn!(
                         provider = %provider.id(),
                         ip = %ip,
@@ -612,59 +613,6 @@ impl BadBots {
         }
     }
 
-    /// Adds the failures that were recorded for the assessed address.
-    ///
-    /// A failure belongs to the address it happened for, so the record is kept
-    /// per address rather than per provider.
-    fn merge_failures(&self, input: &mut VerdictInput, now: OffsetDateTime) {
-        let ttl = self.failure_ttl();
-        let mut failures = match self.inner.failures.lock() {
-            Ok(failures) => failures,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        failures.retain(|_, (_, at)| now - *at <= ttl);
-
-        for provider in &self.inner.providers {
-            let key = CacheKey {
-                provider: provider.id(),
-                ip: input.ip,
-            };
-            let Some((error, _)) = failures.get(&key) else {
-                continue;
-            };
-            input.coverage.record_failure(provider.id(), error.clone());
-        }
-    }
-
-    /// The time a failure stays attached to the address it happened for.
-    fn failure_ttl(&self) -> time::Duration {
-        let seconds = self
-            .inner
-            .config
-            .negative_ttl
-            .as_secs()
-            .min(i64::MAX as u64);
-        time::Duration::seconds(seconds as i64)
-    }
-
-    fn record_address_failure(&self, key: &CacheKey, error: ProviderError, now: OffsetDateTime) {
-        let ttl = self.failure_ttl();
-        let mut failures = match self.inner.failures.lock() {
-            Ok(failures) => failures,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        failures.retain(|_, (_, at)| now - *at <= ttl);
-        failures.insert(key.clone(), (error, now));
-    }
-
-    fn clear_failure(&self, key: &CacheKey) {
-        let mut failures = match self.inner.failures.lock() {
-            Ok(failures) => failures,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        failures.remove(key);
-    }
-
     fn record_refresh(&self, provider: ProviderId, now: OffsetDateTime) {
         let mut refreshes = match self.inner.refreshes.lock() {
             Ok(refreshes) => refreshes,
@@ -827,9 +775,22 @@ impl BadBotsBuilder {
         self
     }
 
+    /// Sets how long a positive lookup result is reused.
+    pub fn positive_ttl(mut self, ttl: Duration) -> Self {
+        self.config.positive_ttl = ttl;
+        self
+    }
+
     /// Sets how long a negative lookup result is reused.
     pub fn negative_ttl(mut self, ttl: Duration) -> Self {
         self.config.negative_ttl = ttl;
+        self
+    }
+
+    /// Sets how long a failed lookup is remembered before the provider is asked
+    /// again.
+    pub fn failure_ttl(mut self, ttl: Duration) -> Self {
+        self.config.failure_ttl = ttl;
         self
     }
 
@@ -945,13 +906,12 @@ impl BadBotsBuilder {
 
         Ok(BadBots {
             inner: Arc::new(Inner {
-                cache: TtlCache::new(config.cache_capacity),
+                cache: TtlCache::new(config.cache_capacity, config.failure_ttl),
                 config,
                 providers,
                 feed_providers,
                 runtimes,
                 health: Mutex::new(HashMap::new()),
-                failures: Mutex::new(HashMap::new()),
                 refreshes: Mutex::new(HashMap::new()),
                 feeds: RwLock::new(Arc::new(LoadedFeeds::default())),
                 markers,
@@ -1243,4 +1203,33 @@ fn api_key_from_env(name: &str) -> Option<ApiKey> {
 /// The number of whole seconds of a duration.
 fn seconds_of(duration: Duration) -> i64 {
     i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+}
+
+/// The instant at which a bound of the host expires.
+///
+/// A bound that reaches beyond the range of the clock ends at the end of that
+/// range.
+pub(crate) fn bound_expiry(now: OffsetDateTime, ttl: Duration) -> OffsetDateTime {
+    let duration = time::Duration::try_from(ttl).unwrap_or(time::Duration::MAX);
+    now.checked_add(duration)
+        .unwrap_or_else(|| OffsetDateTime::new_in_offset(Date::MAX, Time::MAX, UtcOffset::UTC))
+}
+
+/// The instant at which a cached answer stops being usable.
+///
+/// The host bounds the lifetime of every answer: the entry expires at the
+/// earlier of the expiry the provider declared and the bound for the kind of
+/// result the answer carries. The bound can only make the library ask sooner,
+/// it never keeps a claim alive past the validity the provider stated.
+fn entry_expiry(verdict: &ProviderVerdict, config: &Config, now: OffsetDateTime) -> OffsetDateTime {
+    let ttl = if verdict.evidence.is_empty() {
+        config.negative_ttl
+    } else {
+        config.positive_ttl
+    };
+    let bound = bound_expiry(now, ttl);
+    match verdict.expires_at {
+        Some(declared) => declared.min(bound),
+        None => bound,
+    }
 }

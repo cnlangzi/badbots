@@ -83,13 +83,14 @@ The classification `community-blocklist` and the reference
 
 | Rule | Value |
 |---|---|
-| A positive result expires | 90 days after `history.last_seen` |
+| A positive result expires | The earlier of 90 days after `history.last_seen` and `Config::positive_ttl`, 30 days by default |
 | A negative result is reused for | `Config::negative_ttl`, 24 hours by default |
 
 The upstream states that an address without a report for three months is
-unknown, which is the expiry this library applies. The upstream `first_seen`
-field is affected by progressive data degradation and is not used for the
-expiry.
+unknown, which is the expiry the upstream declares. The library expires the
+answer at the earlier of that expiry and the host bound, so a claim is never
+kept for longer than `Config::positive_ttl`. The upstream `first_seen` field is
+affected by progressive data degradation and is not used for the expiry.
 
 ## Terms and attribution
 

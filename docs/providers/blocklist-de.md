@@ -98,15 +98,17 @@ observation of the union.
 
 | Rule | Value |
 |---|---|
-| A query observation expires | 48 hours after the query |
+| A query observation expires | The earlier of 48 hours after the query and `Config::positive_ttl`, 30 days by default |
 | The interval the query asks about | 48 hours ending at the query, configurable through `BlocklistDeConfig::window` |
 | A list observation of `strongips` expires | 7 days after the retrieval |
 | A list observation of the other lists expires | 48 hours after the retrieval |
 | The lists may be fetched again | 30 minutes after the last refresh, whether it succeeded or not |
 
-The lists carry no timestamp per entry, so the observation time of a list
-membership is the retrieval time and the evidence records that it has no
-per-entry observation time.
+The library expires the answer of the query at the earlier of the expiry the
+publisher declares and the host bound, so a claim is never kept for longer
+than `Config::positive_ttl`. The lists carry no timestamp per entry, so the
+observation time of a list membership is the retrieval time and the evidence
+records that it has no per-entry observation time.
 
 ## Terms and attribution
 
