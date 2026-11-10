@@ -6,7 +6,7 @@
 //! carries a count and may corroborate; a list membership carries no count and
 //! is only a signal.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,6 +22,7 @@ use crate::model::{
     ProviderId, SourceFamily, ThreatCategory,
 };
 use crate::provider::lookup::{ProviderRuntime, parse_body};
+use crate::provider::services::{SERVICES, assertion_of, category_of};
 use crate::provider::{
     FeedProvider, FeedSnapshot, LookupProvider, ProviderCapability, ProviderVerdict,
 };
@@ -32,35 +33,15 @@ pub const MIN_ATTACK_EVENTS: u32 = 3;
 /// The time a query answer stays usable.
 pub const VALIDITY: time::Duration = time::Duration::hours(48);
 
-/// The services the upstream publishes a list for.
-pub const SERVICES: &[&str] = &[
-    "all",
-    "ssh",
-    "apache",
-    "imap",
-    "ftp",
-    "sip",
-    "bots",
-    "bruteforcelogin",
-    "strongips",
-];
+/// The list that names every service of the publisher.
+///
+/// The list is the union of the service lists, so an address that a service
+/// list names already gets its observation from that list.
+const EVERY_SERVICE: &str = "all";
 
-/// The kind of activity a service list reports.
-pub fn category_of(service: &str) -> ThreatCategory {
-    match service {
-        "ssh" | "imap" | "ftp" | "sip" | "bruteforcelogin" => ThreatCategory::BruteForce,
-        "apache" => ThreatCategory::WebAttack,
-        "mail" => ThreatCategory::SpamAbuse,
-        _ => ThreatCategory::GenericAbuse,
-    }
-}
-
-/// The claim a service list makes.
-pub fn assertion_of(service: &str) -> Assertion {
-    match service {
-        "bots" | "mail" => Assertion::Abuse,
-        _ => Assertion::Attack,
-    }
+/// The number of whole seconds of a duration.
+fn seconds_of(duration: Duration) -> i64 {
+    i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
 }
 
 /// The time a service list stays usable.
@@ -109,7 +90,9 @@ impl LookupProvider for BlocklistDeQueryProvider {
 
     async fn lookup(&self, ip: IpAddr) -> Result<ProviderVerdict, ProviderError> {
         let now = self.runtime.clock().now();
-        let start = now - time::Duration::seconds(self.window.as_secs() as i64);
+        let start = now
+            .checked_sub(time::Duration::seconds(seconds_of(self.window)))
+            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
         let url = format!("{}/api.php", self.base_url.trim_end_matches('/'));
 
         let request = self
@@ -174,12 +157,42 @@ impl LookupProvider for BlocklistDeQueryProvider {
 }
 
 /// The answer of the per-address query.
+///
+/// The publisher answers with the counts as numbers when they are zero and as
+/// strings when they are not, so both shapes are read.
 #[derive(Clone, Debug, Deserialize)]
 struct QueryResponse {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_count")]
     attacks: Option<u32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_count")]
     reports: Option<u32>,
+}
+
+/// Reads a count the publisher wrote as a number or as a string.
+fn deserialize_count<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Count {
+        Number(u32),
+        Text(String),
+    }
+
+    let count = match Option::<Count>::deserialize(deserializer)? {
+        None => return Ok(None),
+        Some(count) => count,
+    };
+
+    match count {
+        Count::Number(number) => Ok(Some(number)),
+        Count::Text(text) => text
+            .trim()
+            .parse::<u32>()
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
 }
 
 /// The Blocklist.de service list provider.
@@ -250,6 +263,8 @@ impl FeedProvider for BlocklistDeListProvider {
     async fn fetch(&self) -> Result<FeedSnapshot, ProviderError> {
         let now = self.runtime.clock().now();
         let mut entries = Vec::new();
+        let mut listed: HashSet<IpAddr> = HashSet::new();
+        let mut every_service: Vec<IpAddr> = Vec::new();
 
         for service in &self.services {
             let request = self
@@ -259,10 +274,24 @@ impl FeedProvider for BlocklistDeListProvider {
                 .header("Accept-Encoding", "gzip");
             let response = self.runtime.send_anonymous(request, now).await?;
             let body = self.runtime.read_body(response).await?;
+            let addresses = parse_service_list(&body)?;
 
-            for address in parse_service_list(&body)? {
+            if service == EVERY_SERVICE {
+                every_service = addresses;
+                continue;
+            }
+
+            for address in addresses {
+                listed.insert(address);
                 entries.push(observation_for(service, address, now));
             }
+        }
+
+        for address in every_service {
+            if listed.contains(&address) {
+                continue;
+            }
+            entries.push(observation_for(EVERY_SERVICE, address, now));
         }
 
         Ok(FeedSnapshot {

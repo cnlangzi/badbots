@@ -72,7 +72,7 @@ An observation about a network has the scope `Prefix`, the assertion
 | Rule | Value |
 |---|---|
 | An observation expires | 26 hours after the publication time |
-| The list may be fetched again | One hour after the last successful refresh |
+| The list may be fetched again | One hour after the last refresh, whether it succeeded or not |
 
 The publisher states that the list is refreshed daily. The 26 hours leave room
 for the publication of the list to be late without the data becoming stale.

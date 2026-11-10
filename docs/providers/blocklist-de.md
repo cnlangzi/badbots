@@ -65,6 +65,9 @@ of abuse notifications that were sent to the address's provider.
 | `attacks` | The number of events, the count of the observation |
 | `reports` | The number of abuse notifications, recorded as a raw value only |
 
+The publisher writes the counts as numbers when they are zero and as strings
+when they are not, so both shapes are read.
+
 The notification count is never a corroboration count. It says how often the
 publisher complained to the address's provider, not how often the address
 attacked something.
@@ -78,6 +81,11 @@ The per-service lists hold one address per line and are gzip-compressed. The
 services are `all`, `ssh`, `apache`, `imap`, `ftp`, `sip`, `bots`,
 `bruteforcelogin` and `strongips`. A membership produces an `Indicative`
 observation with the scope `Exact`, because a membership carries no count.
+
+The list `all` is the union of the service lists. An address that a service
+list names gets its observation from that list, because the service list says
+more than the union does. An address that only the union names gets the
+observation of the union.
 
 | Service | Threat category |
 |---|---|
@@ -94,7 +102,7 @@ observation with the scope `Exact`, because a membership carries no count.
 | The interval the query asks about | 48 hours ending at the query, configurable through `BlocklistDeConfig::window` |
 | A list observation of `strongips` expires | 7 days after the retrieval |
 | A list observation of the other lists expires | 48 hours after the retrieval |
-| The lists may be fetched again | 30 minutes after the last successful refresh |
+| The lists may be fetched again | 30 minutes after the last refresh, whether it succeeded or not |
 
 The lists carry no timestamp per entry, so the observation time of a list
 membership is the retrieval time and the evidence records that it has no

@@ -101,7 +101,22 @@ describes a context, and several of them name legitimate services.
 
 A label that begins with `blocklistde` names the data of another publisher.
 The observation keeps the family of that publisher, so a list and its origin
-never count as two votes.
+never count as two votes. The publisher names the services of that list by
+their name and by the port they serve, and the observation carries the threat
+category of the service:
+
+| Label suffix | Service | Threat category |
+|---|---|---|
+| `22` | `ssh` | `BruteForce` |
+| `21` | `ftp` | `BruteForce` |
+| `110`, `143`, `993`, `courierimap` | `imap` | `BruteForce` |
+| `80`, `443`, `apache` | `apache` | `WebAttack` |
+| `25` | `mail` | `SpamAbuse` |
+| `bruteforcelogin` | `bruteforcelogin` | `BruteForce` |
+| `bots` | `bots` | `GenericAbuse` |
+
+A suffix that names no service produces an `Abuse` observation of the threat
+category `GenericAbuse`.
 
 ## Freshness
 
@@ -110,7 +125,11 @@ never count as two votes.
 | The list of the subnets covers | The three days before the publication time |
 | A subnet observation expires | 3 days after the publication time |
 | An address observation expires | 7 days after the last sighting |
-| The lists may be fetched again | One hour after the last successful refresh |
+| The lists may be fetched again | One hour after the last refresh, whether it succeeded or not |
+
+The publisher writes the publication time in ISO 8601, with or without an
+offset. The header of `block.txt` names it `updated`, the header of
+`threatintel.txt` names it `last update`.
 
 ## Terms and attribution
 

@@ -200,13 +200,24 @@ async fn a_label_of_another_publisher_keeps_that_lineage() {
 }
 
 #[tokio::test]
+async fn a_label_that_names_a_port_carries_the_service_of_that_port() {
+    let (_server, provider) = provider_for().await;
+    let snapshot = provider.fetch().await.expect("the lists are read");
+
+    let ssh = observation_of(&snapshot, "45.32.1.5").expect("the address is an observation");
+    assert_eq!(ssh.family, SourceFamily::BLOCKLIST_DE);
+    assert_eq!(ssh.category, ThreatCategory::BruteForce);
+
+    let web = observation_of(&snapshot, "45.32.1.6").expect("the address is an observation");
+    assert_eq!(web.category, ThreatCategory::WebAttack);
+}
+
+#[tokio::test]
 async fn the_labels_that_describe_a_context_are_not_observations() {
     let (_server, provider) = provider_for().await;
     let snapshot = provider.fetch().await.expect("the lists are read");
 
     for address in [
-        "45.32.1.5",
-        "45.32.1.6",
         "45.32.1.7",
         "45.32.1.8",
         "45.32.1.9",
@@ -214,6 +225,8 @@ async fn the_labels_that_describe_a_context_are_not_observations() {
         "45.32.1.11",
         "45.32.1.12",
         "45.32.1.13",
+        "45.32.1.14",
+        "45.32.1.15",
     ] {
         assert!(
             observation_of(&snapshot, address).is_none(),

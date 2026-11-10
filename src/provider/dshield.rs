@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use ipnet::IpNet;
-use time::{OffsetDateTime, PrimitiveDateTime};
+use time::OffsetDateTime;
 
 use crate::error::ProviderError;
 use crate::index::ADDRESS_KEY;
@@ -19,8 +19,8 @@ use crate::model::{
     Assertion, Evidence, EvidenceStrength, MatchScope, ObservationWindow, ProviderId, SourceFamily,
     ThreatCategory,
 };
-use crate::provider::blocklist_de;
 use crate::provider::lookup::ProviderRuntime;
+use crate::provider::services::{SERVICES, assertion_of, category_of};
 use crate::provider::{FeedProvider, FeedSnapshot, ProviderCapability};
 
 /// The file name of the subnet list.
@@ -186,6 +186,7 @@ pub fn parse_block_list(body: &str, now: OffsetDateTime) -> Result<ParsedList, P
         let Ok(network) = IpNet::new(address, prefix_len) else {
             continue;
         };
+        let network = network.trunc();
 
         let mut raw_values: BTreeMap<String, String> = BTreeMap::new();
         raw_values.insert("range_start".to_string(), columns[0].trim().to_string());
@@ -298,11 +299,15 @@ fn observation_for(
             EvidenceStrength::Indicative,
         ),
         other => {
-            let service = other.strip_prefix("blocklistde")?;
+            let label = other.strip_prefix("blocklistde")?;
+            let (assertion, category) = match service_of(label) {
+                Some(service) => (assertion_of(service), category_of(service)),
+                None => (Assertion::Abuse, ThreatCategory::GenericAbuse),
+            };
             (
                 SourceFamily::BLOCKLIST_DE,
-                blocklist_de::assertion_of(service),
-                blocklist_de::category_of(service),
+                assertion,
+                category,
                 EvidenceStrength::Indicative,
             )
         }
@@ -359,57 +364,126 @@ fn split(body: &str) -> Result<(Vec<String>, Vec<&str>), ProviderError> {
 /// The publication time the header of a list carries.
 fn published_at_of(header_lines: &[String]) -> Option<OffsetDateTime> {
     header_lines.iter().rev().find_map(|line| {
-        let position = find_updated(line)?;
-        let rest = line[position + "updated".len()..].trim();
-        parse_timestamp(rest).or_else(|| {
-            rest.split_once(':')
-                .and_then(|(_, value)| parse_timestamp(value.trim()))
-        })
+        let position = find_update(line)?;
+        let mut rest = line[position + "update".len()..].trim();
+
+        if rest.starts_with(['d', 'D']) {
+            rest = rest[1..].trim();
+        }
+        let rest = rest.strip_prefix(':').unwrap_or(rest).trim();
+
+        parse_timestamp(rest).or_else(|| rest.split_whitespace().next().and_then(parse_timestamp))
     })
 }
 
 /// The position of the word that names the publication time.
-fn find_updated(line: &str) -> Option<usize> {
+fn find_update(line: &str) -> Option<usize> {
     let bytes = line.as_bytes();
-    (0..bytes.len().saturating_sub(7))
-        .find(|&index| line[index..index + 7].eq_ignore_ascii_case("updated"))
+    (0..bytes.len().saturating_sub(6))
+        .find(|&index| line[index..index + 6].eq_ignore_ascii_case("update"))
 }
 
 /// Records a value the publisher left empty.
 fn insert_value(raw_values: &mut BTreeMap<String, String>, key: &str, value: &str) {
     let value = value.trim();
-    if value.is_empty() || value == "-" {
+    if value.is_empty() || value == "-" || value == "None" {
         return;
     }
     raw_values.insert(key.to_string(), value.to_string());
 }
 
+/// The service a label of another publisher names.
+///
+/// The publisher names the services of the list by their name, and some of
+/// them by the port they serve.
+fn service_of(label: &str) -> Option<&'static str> {
+    match label {
+        "22" => Some("ssh"),
+        "21" => Some("ftp"),
+        "25" => Some("mail"),
+        "110" | "143" | "993" | "courierimap" => Some("imap"),
+        "80" | "443" => Some("apache"),
+        other => SERVICES.iter().find(|service| **service == other).copied(),
+    }
+}
+
 /// Parses the publication time of a list.
 ///
-/// The publisher writes the time in UTC without an offset, so the formats
-/// without one are read as UTC.
+/// The publisher writes the time in ISO 8601, with or without an offset.
 fn parse_timestamp(text: &str) -> Option<OffsetDateTime> {
     let text = text.trim();
+    let (date, time) = text.split_once(['T', ' '])?;
 
-    if let Ok(timestamp) =
-        OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339)
-    {
-        return Some(timestamp);
-    }
-    if let Ok(timestamp) = PrimitiveDateTime::parse(
-        text,
-        &time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]:[second] UTC"),
-    ) {
-        return Some(timestamp.assume_utc());
-    }
-    PrimitiveDateTime::parse(
-        text,
-        &time::macros::format_description!(
-            "[weekday repr:short] [month repr:short] [day] [hour]:[minute]:[second] [year] UTC"
-        ),
+    let date = time::Date::parse(
+        date.trim(),
+        &time::macros::format_description!("[year]-[month]-[day]"),
     )
-    .ok()
-    .map(|timestamp| timestamp.assume_utc())
+    .ok()?;
+
+    let (time, offset) = split_offset(time.trim());
+    let (clock, fraction) = match time.split_once('.') {
+        Some((clock, fraction)) => (clock, fraction),
+        None => (time, ""),
+    };
+
+    let clock = time::Time::parse(
+        clock,
+        &time::macros::format_description!("[hour]:[minute]:[second]"),
+    )
+    .ok()?;
+
+    let nanoseconds = nanoseconds_of(fraction)?;
+    let timestamp = date.with_time(clock).assume_utc().to_offset(offset)
+        + time::Duration::nanoseconds(i64::from(nanoseconds));
+
+    Some(timestamp)
+}
+
+/// Splits the offset of a timestamp from the time of day.
+fn split_offset(text: &str) -> (&str, time::UtcOffset) {
+    if let Some(time) = text.strip_suffix('Z') {
+        return (time, time::UtcOffset::UTC);
+    }
+
+    let position = text.rfind(['+', '-']);
+    let Some(position) = position else {
+        return (text, time::UtcOffset::UTC);
+    };
+
+    let sign = if text.as_bytes()[position] == b'+' {
+        1
+    } else {
+        -1
+    };
+    let offset = text[position + 1..]
+        .split_once(':')
+        .and_then(|(hours, minutes)| {
+            let hours: i8 = hours.parse().ok()?;
+            let minutes: i8 = minutes.parse().ok()?;
+            time::UtcOffset::from_hms(sign * hours, sign * minutes, 0).ok()
+        });
+
+    match offset {
+        Some(offset) => (&text[..position], offset),
+        None => (text, time::UtcOffset::UTC),
+    }
+}
+
+/// The nanoseconds a fractional second stands for.
+fn nanoseconds_of(fraction: &str) -> Option<u32> {
+    if fraction.is_empty() {
+        return Some(0);
+    }
+    if !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+
+    let mut digits = fraction.to_string();
+    digits.truncate(9);
+    while digits.len() < 9 {
+        digits.push('0');
+    }
+    digits.parse().ok()
 }
 
 /// Parses a date of a list.

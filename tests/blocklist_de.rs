@@ -8,9 +8,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use badbots::provider::blocklist_de::{
-    BlocklistDeListProvider, BlocklistDeQueryProvider, MIN_ATTACK_EVENTS, SERVICES,
+    BlocklistDeListProvider, BlocklistDeQueryProvider, MIN_ATTACK_EVENTS,
 };
 use badbots::provider::lookup::{ProviderRuntime, daily_guard};
+use badbots::provider::services::SERVICES;
 use badbots::provider::{FeedProvider, LookupProvider, ProviderCapability};
 use badbots::{
     Assertion, EvidenceStrength, MatchScope, ProviderError, ProviderId, SourceFamily,
@@ -191,6 +192,19 @@ async fn three_attack_events_produce_an_observation_with_a_window_and_an_expiry(
 }
 
 #[tokio::test]
+async fn an_address_without_activity_is_answered_with_numbers() {
+    let (_server, provider) =
+        query_provider_for(&fixture("blocklist_de/api_no_activity.json")).await;
+    let verdict = provider
+        .lookup("45.32.1.1".parse().unwrap())
+        .await
+        .expect("the query succeeds");
+
+    assert!(verdict.evidence.is_empty());
+    assert_eq!(verdict.coverage, badbots::CoverageLevel::Definitive);
+}
+
+#[tokio::test]
 async fn an_error_page_is_a_parse_error() {
     let (_server, provider) = query_provider_for(&fixture("blocklist_de/api_malformed.json")).await;
     let error = provider
@@ -253,6 +267,57 @@ async fn the_other_lists_stay_valid_for_two_days() {
 
     let entry = &snapshot.entries[0];
     assert_eq!(entry.expires_at, Some(now() + time::Duration::hours(48)));
+}
+
+#[tokio::test]
+async fn a_window_that_is_out_of_range_does_not_overflow() {
+    let (server, _provider) = query_provider_for(&fixture("blocklist_de/api_attacks.json")).await;
+    let provider =
+        BlocklistDeQueryProvider::new(server.uri(), Duration::from_secs(u64::MAX), runtime());
+
+    let verdict = provider
+        .lookup("45.32.1.1".parse().unwrap())
+        .await
+        .expect("the query succeeds");
+    assert_eq!(verdict.evidence.len(), 1);
+}
+
+#[tokio::test]
+async fn the_list_of_every_service_does_not_repeat_the_service_lists() {
+    let server = MockServer::start().await;
+    for (service, body) in [
+        ("all", "45.32.1.1\n45.32.1.2\n45.32.1.3\n"),
+        ("ssh", "45.32.1.1\n45.32.1.2\n"),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/lists/{service}.txt")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body.to_string()))
+            .mount(&server)
+            .await;
+    }
+
+    let provider = BlocklistDeListProvider::with_services(
+        server.uri(),
+        vec!["all".to_string(), "ssh".to_string()],
+        Duration::from_secs(30 * 60),
+        runtime(),
+    );
+    let snapshot = provider.fetch().await.expect("the lists are read");
+
+    let addresses: Vec<String> = snapshot
+        .entries
+        .iter()
+        .map(|entry| entry.raw_values.get("address").cloned().unwrap_or_default())
+        .collect();
+    assert_eq!(addresses, vec!["45.32.1.1", "45.32.1.2", "45.32.1.3"]);
+
+    let service = snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.raw_values.get("address").unwrap() == "45.32.1.3")
+        .and_then(|entry| entry.raw_values.get("service"))
+        .cloned();
+    assert_eq!(service.as_deref(), Some("all"));
 }
 
 #[tokio::test]
