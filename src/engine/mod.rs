@@ -6,7 +6,7 @@
 
 pub mod rules;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use time::OffsetDateTime;
 
@@ -28,15 +28,15 @@ pub fn classify(input: &VerdictInput, config: &Config, now: OffsetDateTime) -> I
         .iter()
         .partition(|evidence| evidence.is_valid_at(now));
 
+    let suppressions = suppressions_by_provider(&input.suppressions);
+
     let valid: Vec<&Evidence> = valid
         .into_iter()
-        .filter(|evidence| {
-            suppression_of(&input.suppressions, &evidence.provider) != Some(Suppression::Safe)
-        })
+        .filter(|evidence| suppressions.get(&evidence.provider) != Some(&Suppression::Safe))
         .collect();
 
     let single_source = valid.iter().any(|evidence| {
-        suppression_of(&input.suppressions, &evidence.provider) != Some(Suppression::Benign)
+        suppressions.get(&evidence.provider) != Some(&Suppression::Benign)
             && convicts_alone(evidence, policy)
     });
     let corroborated = count_voting_families(&valid, policy) >= 2;
@@ -64,33 +64,22 @@ pub fn classify(input: &VerdictInput, config: &Config, now: OffsetDateTime) -> I
     }
 }
 
-/// The suppression that speaks for a provider.
+/// The suppression that speaks for each provider.
 ///
 /// A suppression constrains the evidence of the provider that published it and
 /// nothing else. A provider that published more than one suppression is treated
 /// as the strongest of them, because `Safe` withdraws the evidence entirely.
-fn suppression_of(
+fn suppressions_by_provider(
     suppressions: &[(ProviderId, Suppression)],
-    provider: &ProviderId,
-) -> Option<Suppression> {
-    let mut safe = false;
-    let mut benign = false;
-    for (id, suppression) in suppressions {
-        if id != provider {
-            continue;
-        }
-        match suppression {
-            Suppression::Safe => safe = true,
-            Suppression::Benign => benign = true,
+) -> BTreeMap<ProviderId, Suppression> {
+    let mut by_provider: BTreeMap<ProviderId, Suppression> = BTreeMap::new();
+    for (provider, suppression) in suppressions {
+        let published = by_provider.entry(provider.clone()).or_insert(*suppression);
+        if *suppression == Suppression::Safe {
+            *published = Suppression::Safe;
         }
     }
-    if safe {
-        Some(Suppression::Safe)
-    } else if benign {
-        Some(Suppression::Benign)
-    } else {
-        None
-    }
+    by_provider
 }
 
 /// Whether an observation satisfies the single-source conviction path.
