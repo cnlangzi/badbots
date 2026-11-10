@@ -58,10 +58,10 @@ The upstream reports, per address:
 |---|---|
 | `reputation` | Rule input, recorded as `reputation` |
 | `behaviors[].name` | Rule input, recorded as `behaviors` |
-| `classifications.false_positives` | Suppression, recorded as `false_positives` |
+| `classifications.false_positives` | Suppression |
 | `classifications.classifications` | Rule input, recorded as `classifications` |
 | `references` | Rule input, recorded as `references` |
-| `background_noise`, `background_noise_score` | Rule input, recorded as raw values |
+| `background_noise`, `background_noise_score` | Rule input, recorded as upstream values |
 | `history.last_seen` | `observed_at`, the base of the expiry |
 | `history.first_seen` | Recorded as `first_seen` |
 | `scores` | Recorded as `scores`, never used for the verdict |
@@ -96,8 +96,8 @@ expiry.
 The upstream publishes its own terms of service and API documentation. A host
 that uses this provider is bound by those terms; this library does not restate
 or reinterpret them. The upstream names itself in the fields it returns, and
-this library preserves those fields in the raw values of the verdict so that
-an attribution requirement can be met from the evidence the host already
+this library preserves those fields in the upstream values of the verdict so
+that an attribution requirement can be met from the evidence the host already
 stores.
 
 ## Known false-positive profile
@@ -107,19 +107,25 @@ uses it:
 
 | Pattern | Effect |
 |---|---|
-| A non-empty `classifications.false_positives` list | A `Safe` suppression: the address cannot be convicted |
-| The reputation `benign` | A `Benign` suppression: the address cannot be convicted by a single source |
+| A non-empty `classifications.false_positives` list | A `Safe` suppression |
+| The reputation `benign` | A `Benign` suppression |
 | The reputation `safe` | A `Safe` suppression |
 
-A `Safe` suppression prevents a `Bad` verdict outright. A `Benign` suppression
-prevents a single-source conviction but leaves a conviction by two independent
-source families intact.
+A suppression speaks for the provider that published it and constrains the
+evidence of that provider alone. A `Safe` suppression voids the evidence of the
+publishing provider: it no longer convicts on its own and no longer adds a
+corroboration vote. A `Benign` suppression keeps the evidence of the publishing
+provider, which may still corroborate but no longer convicts on its own.
+Neither of them constrains the evidence of another provider, so an address that
+one provider suppresses may still be convicted by another.
 
 A second pattern produces false positives without a suppression: a background
 noise level of `high` means that the upstream sees many addresses of that range
 behaving the same way. Such an address never convicts on its own; it produces a
 `Suspect` verdict instead.
 
-The labels the upstream publishes are recorded in
-`raw_values["false_positives"]`, so a host can recognize the exit nodes and
-shared infrastructure that recur in its traffic.
+The upstream publishes the labels of the false-positive profile it assigned, and
+the provider records them in the upstream values of its observation. The `Safe`
+suppression it publishes alongside voids that observation, so the labels reach
+neither the evidence nor the upstream values of the verdict. The verdict carries
+the suppression itself.

@@ -15,7 +15,8 @@ use time::{Duration, OffsetDateTime};
 use crate::engine::rules;
 use crate::error::ProviderError;
 use crate::model::{
-    Assertion, CoverageLevel, Evidence, MatchScope, ProviderId, SourceFamily, ThreatCategory,
+    Assertion, CoverageLevel, Evidence, MatchScope, ProviderId, SourceFamily, Suppression,
+    ThreatCategory,
 };
 use crate::provider::lookup::{ProviderRuntime, parse_body};
 use crate::provider::{LookupProvider, ProviderCapability, ProviderVerdict};
@@ -123,6 +124,16 @@ impl LookupProvider for AbuseIpdbProvider {
         let parsed: CheckResponse = parse_body(&body)?;
         let data = parsed.data;
 
+        if data.is_whitelisted == Some(true) {
+            return Ok(ProviderVerdict {
+                provider: ProviderId::ABUSEIPDB,
+                coverage: CoverageLevel::Definitive,
+                evidence: Vec::new(),
+                suppression: Some(Suppression::Safe),
+                expires_at: None,
+            });
+        }
+
         let score = data.abuse_confidence_score.unwrap_or_default().max(0) as u32;
         let distinct_users = data.num_distinct_users.unwrap_or_default();
         let total_reports = data.total_reports.unwrap_or_default();
@@ -155,11 +166,11 @@ impl LookupProvider for AbuseIpdbProvider {
             None => false,
         };
 
-        let mut raw_values: BTreeMap<String, String> = BTreeMap::new();
-        raw_values.insert("abuse_confidence_score".to_string(), score.to_string());
-        raw_values.insert("num_distinct_users".to_string(), distinct_users.to_string());
-        raw_values.insert("total_reports".to_string(), total_reports.to_string());
-        raw_values.insert(
+        let mut upstream_values: BTreeMap<String, String> = BTreeMap::new();
+        upstream_values.insert("abuse_confidence_score".to_string(), score.to_string());
+        upstream_values.insert("num_distinct_users".to_string(), distinct_users.to_string());
+        upstream_values.insert("total_reports".to_string(), total_reports.to_string());
+        upstream_values.insert(
             "categories".to_string(),
             category_ids
                 .iter()
@@ -168,19 +179,19 @@ impl LookupProvider for AbuseIpdbProvider {
                 .join(","),
         );
         if let Some(usage_type) = &data.usage_type {
-            raw_values.insert("usage_type".to_string(), usage_type.clone());
+            upstream_values.insert("usage_type".to_string(), usage_type.clone());
         }
         if let Some(country_code) = &data.country_code {
-            raw_values.insert("country_code".to_string(), country_code.clone());
+            upstream_values.insert("country_code".to_string(), country_code.clone());
         }
         if let Some(isp) = &data.isp {
-            raw_values.insert("isp".to_string(), isp.clone());
+            upstream_values.insert("isp".to_string(), isp.clone());
         }
         if let Some(domain) = &data.domain {
-            raw_values.insert("domain".to_string(), domain.clone());
+            upstream_values.insert("domain".to_string(), domain.clone());
         }
         if let Some(is_tor) = data.is_tor {
-            raw_values.insert("is_tor".to_string(), is_tor.to_string());
+            upstream_values.insert("is_tor".to_string(), is_tor.to_string());
         }
 
         let strength = rules::abuseipdb::strength(
@@ -207,7 +218,7 @@ impl LookupProvider for AbuseIpdbProvider {
             family: SourceFamily::ABUSEIPDB,
             assertion,
             category,
-            raw_category: inbound.first().map(|(id, _, _)| id.to_string()),
+            upstream_category: inbound.first().map(|(id, _, _)| id.to_string()),
             strength,
             scope: MatchScope::Exact,
             observed_at: last_reported_at,
@@ -216,7 +227,7 @@ impl LookupProvider for AbuseIpdbProvider {
             expires_at: Some(expires_at),
             observation_window: None,
             count: Some(total_reports),
-            raw_values,
+            upstream_values,
         };
 
         Ok(ProviderVerdict {
@@ -255,6 +266,8 @@ struct CheckData {
     domain: Option<String>,
     #[serde(default)]
     is_tor: Option<bool>,
+    #[serde(default)]
+    is_whitelisted: Option<bool>,
     #[serde(default)]
     total_reports: Option<u32>,
     #[serde(default)]

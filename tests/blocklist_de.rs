@@ -141,8 +141,8 @@ async fn the_attack_count_is_the_signal_and_the_notifications_are_only_a_value()
 
     let evidence = &verdict.evidence[0];
     assert_eq!(evidence.count, Some(7));
-    assert_eq!(evidence.raw_values.get("attacks").unwrap(), "7");
-    assert_eq!(evidence.raw_values.get("reports").unwrap(), "900");
+    assert_eq!(evidence.upstream_values.get("attacks").unwrap(), "7");
+    assert_eq!(evidence.upstream_values.get("reports").unwrap(), "900");
     assert_eq!(evidence.family, SourceFamily::BLOCKLIST_DE);
     assert_eq!(evidence.strength, EvidenceStrength::Corroborating);
     assert_eq!(evidence.scope, MatchScope::Exact);
@@ -231,7 +231,13 @@ async fn the_service_lists_are_read_gzip_compressed() {
     let addresses: Vec<String> = snapshot
         .entries
         .iter()
-        .map(|entry| entry.raw_values.get("address").cloned().unwrap_or_default())
+        .map(|entry| {
+            entry
+                .upstream_values
+                .get("address")
+                .cloned()
+                .unwrap_or_default()
+        })
         .collect();
     assert_eq!(addresses, vec!["45.32.1.1", "45.32.1.2", "203.0.113.7"]);
 }
@@ -247,7 +253,7 @@ async fn a_list_membership_is_only_a_signal() {
     assert_eq!(entry.strength, EvidenceStrength::Indicative);
     assert_eq!(entry.scope, MatchScope::Exact);
     assert_eq!(entry.category, ThreatCategory::BruteForce);
-    assert_eq!(entry.raw_values.get("service").unwrap(), "ssh");
+    assert_eq!(entry.upstream_values.get("service").unwrap(), "ssh");
 }
 
 #[tokio::test]
@@ -307,15 +313,21 @@ async fn the_list_of_every_service_does_not_repeat_the_service_lists() {
     let addresses: Vec<String> = snapshot
         .entries
         .iter()
-        .map(|entry| entry.raw_values.get("address").cloned().unwrap_or_default())
+        .map(|entry| {
+            entry
+                .upstream_values
+                .get("address")
+                .cloned()
+                .unwrap_or_default()
+        })
         .collect();
     assert_eq!(addresses, vec!["45.32.1.1", "45.32.1.2", "45.32.1.3"]);
 
     let service = snapshot
         .entries
         .iter()
-        .find(|entry| entry.raw_values.get("address").unwrap() == "45.32.1.3")
-        .and_then(|entry| entry.raw_values.get("service"))
+        .find(|entry| entry.upstream_values.get("address").unwrap() == "45.32.1.3")
+        .and_then(|entry| entry.upstream_values.get("service"))
         .cloned();
     assert_eq!(service.as_deref(), Some("all"));
 }

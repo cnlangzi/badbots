@@ -135,7 +135,7 @@ fn evidence(family: &str, strength: EvidenceStrength) -> Evidence {
         family: SourceFamily::new(family.to_string()),
         assertion: badbots::Assertion::Attack,
         category: ThreatCategory::WebAttack,
-        raw_category: None,
+        upstream_category: None,
         strength,
         scope: MatchScope::Exact,
         observed_at: None,
@@ -144,7 +144,7 @@ fn evidence(family: &str, strength: EvidenceStrength) -> Evidence {
         expires_at: None,
         observation_window: None,
         count: None,
-        raw_values: Default::default(),
+        upstream_values: Default::default(),
     }
 }
 

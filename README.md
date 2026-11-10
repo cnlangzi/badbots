@@ -159,7 +159,7 @@ to do about it.
 | `Unknown` with reason `NoEvidence` | Treat as unclassified | Refresh the intelligence before the next decision |
 | `Unknown` with reason `EvidenceExpired` | Treat as unclassified | The claim about the address is too old to act on |
 
-The verdict carries the full evidence set, including the raw upstream values, so
+The verdict carries the full evidence set, including the upstream values, so
 a host that needs a different granularity of trust can derive its own policy
 from `verdict.evidence` without asking the library for a score.
 

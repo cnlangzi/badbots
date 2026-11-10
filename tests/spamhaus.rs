@@ -103,8 +103,8 @@ async fn an_entry_is_a_network_control_observation() {
         entry.expires_at,
         Some(published_at() + time::Duration::hours(26))
     );
-    assert_eq!(entry.raw_values.get("sblid").unwrap(), "SBL256894");
-    assert_eq!(entry.raw_values.get("rir").unwrap(), "apinc");
+    assert_eq!(entry.upstream_values.get("sblid").unwrap(), "SBL256894");
+    assert_eq!(entry.upstream_values.get("rir").unwrap(), "apinc");
 }
 
 #[tokio::test]

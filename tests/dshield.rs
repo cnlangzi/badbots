@@ -32,7 +32,7 @@ fn observation_of<'a>(
     snapshot
         .entries
         .iter()
-        .find(|entry| entry.raw_values.get("address").map(String::as_str) == Some(address))
+        .find(|entry| entry.upstream_values.get("address").map(String::as_str) == Some(address))
 }
 
 async fn provider_for() -> (MockServer, DShieldProvider) {
@@ -113,7 +113,7 @@ async fn a_block_record_is_a_reconnaissance_observation() {
     let entry = snapshot
         .entries
         .iter()
-        .find(|entry| entry.raw_values.get("targets").map(String::as_str) == Some("350"))
+        .find(|entry| entry.upstream_values.get("targets").map(String::as_str) == Some("350"))
         .expect("the record is an observation");
 
     assert_eq!(entry.provider, ProviderId::DSHIELD);
@@ -139,11 +139,9 @@ async fn a_row_that_is_not_a_record_is_skipped() {
     let (_server, provider) = provider_for().await;
     let snapshot = provider.fetch().await.expect("the lists are read");
 
-    assert!(
-        !snapshot.entries.iter().any(
-            |entry| entry.raw_values.get("targets").map(String::as_str) == Some("not-a-number")
-        )
-    );
+    assert!(!snapshot.entries.iter().any(|entry| {
+        entry.upstream_values.get("targets").map(String::as_str) == Some("not-a-number")
+    }));
 }
 
 #[tokio::test]

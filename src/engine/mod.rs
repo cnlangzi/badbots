@@ -12,8 +12,8 @@ use time::OffsetDateTime;
 
 use crate::config::{Config, NetworkScopePolicy};
 use crate::model::{
-    Assertion, Classification, Evidence, EvidenceStrength, IpVerdict, Suppression, VerdictInput,
-    VerdictReason,
+    Assertion, Classification, Evidence, EvidenceStrength, IpVerdict, ProviderId, Suppression,
+    VerdictInput, VerdictReason,
 };
 
 /// Classifies an evidence set.
@@ -28,17 +28,18 @@ pub fn classify(input: &VerdictInput, config: &Config, now: OffsetDateTime) -> I
         .iter()
         .partition(|evidence| evidence.is_valid_at(now));
 
-    let safe = input
-        .suppressions
-        .iter()
-        .any(|(_, suppression)| *suppression == Suppression::Safe);
-    let benign = input
-        .suppressions
-        .iter()
-        .any(|(_, suppression)| *suppression == Suppression::Benign);
+    let valid: Vec<&Evidence> = valid
+        .into_iter()
+        .filter(|evidence| {
+            suppression_of(&input.suppressions, &evidence.provider) != Some(Suppression::Safe)
+        })
+        .collect();
 
-    let single_source = !safe && !benign && valid.iter().any(|e| convicts_alone(e, policy));
-    let corroborated = !safe && count_voting_families(&valid, policy) >= 2;
+    let single_source = valid.iter().any(|evidence| {
+        suppression_of(&input.suppressions, &evidence.provider) != Some(Suppression::Benign)
+            && convicts_alone(evidence, policy)
+    });
+    let corroborated = count_voting_families(&valid, policy) >= 2;
 
     let (classification, reason) = if single_source || corroborated {
         (Classification::Bad, VerdictReason::Convicted)
@@ -60,6 +61,35 @@ pub fn classify(input: &VerdictInput, config: &Config, now: OffsetDateTime) -> I
         suppressions: input.suppressions.clone(),
         coverage: input.coverage.clone(),
         assessed_at: now,
+    }
+}
+
+/// The suppression that speaks for a provider.
+///
+/// A suppression constrains the evidence of the provider that published it and
+/// nothing else. A provider that published more than one suppression is treated
+/// as the strongest of them, because `Safe` withdraws the evidence entirely.
+fn suppression_of(
+    suppressions: &[(ProviderId, Suppression)],
+    provider: &ProviderId,
+) -> Option<Suppression> {
+    let mut safe = false;
+    let mut benign = false;
+    for (id, suppression) in suppressions {
+        if id != provider {
+            continue;
+        }
+        match suppression {
+            Suppression::Safe => safe = true,
+            Suppression::Benign => benign = true,
+        }
+    }
+    if safe {
+        Some(Suppression::Safe)
+    } else if benign {
+        Some(Suppression::Benign)
+    } else {
+        None
     }
 }
 
@@ -109,11 +139,12 @@ mod tests {
 
     use time::{Duration, OffsetDateTime};
 
-    use super::classify;
+    use super::{classify, count_voting_families};
     use crate::config::{Config, NetworkScopePolicy};
     use crate::model::{
-        Assertion, Classification, Coverage, CoverageLevel, Evidence, EvidenceStrength, MatchScope,
-        ProviderId, SourceFamily, Suppression, ThreatCategory, VerdictInput, VerdictReason,
+        Assertion, Classification, Coverage, CoverageLevel, Evidence, EvidenceStrength, IpVerdict,
+        MatchScope, ProviderId, SourceFamily, Suppression, ThreatCategory, VerdictInput,
+        VerdictReason,
     };
 
     fn now() -> OffsetDateTime {
@@ -132,7 +163,7 @@ mod tests {
             family,
             assertion,
             category: ThreatCategory::WebAttack,
-            raw_category: None,
+            upstream_category: None,
             strength,
             scope,
             observed_at: None,
@@ -141,7 +172,7 @@ mod tests {
             expires_at: None,
             observation_window: None,
             count: None,
-            raw_values: Default::default(),
+            upstream_values: Default::default(),
         }
     }
 
@@ -184,6 +215,12 @@ mod tests {
             suppressions: Vec::new(),
             coverage: Coverage::default(),
         }
+    }
+
+    /// The number of source families the verdict may convict by.
+    fn voting_families(verdict: &IpVerdict, config: &Config) -> usize {
+        let evidence: Vec<&Evidence> = verdict.evidence.iter().collect();
+        count_voting_families(&evidence, config.network_scope_policy)
     }
 
     #[test]
@@ -266,36 +303,87 @@ mod tests {
     }
 
     #[test]
-    fn a_safe_suppression_prevents_a_conviction() {
+    fn a_safe_suppression_of_another_provider_does_not_prevent_a_conviction() {
         let mut input = input(vec![exact_convicting("abuseipdb", "abuseipdb")]);
         input
             .suppressions
             .push((ProviderId::new("crowdsec"), Suppression::Safe));
         let verdict = classify(&input, &Config::default(), now());
-        assert_eq!(verdict.classification, Classification::Suspect);
+        assert_eq!(verdict.classification, Classification::Bad);
+        assert_eq!(verdict.reason, VerdictReason::Convicted);
     }
 
     #[test]
-    fn a_benign_suppression_prevents_a_single_source_conviction() {
+    fn a_benign_suppression_of_another_provider_does_not_prevent_a_conviction() {
         let mut input = input(vec![exact_convicting("abuseipdb", "abuseipdb")]);
         input
             .suppressions
             .push((ProviderId::new("crowdsec"), Suppression::Benign));
         let verdict = classify(&input, &Config::default(), now());
-        assert_eq!(verdict.classification, Classification::Suspect);
+        assert_eq!(verdict.classification, Classification::Bad);
+        assert_eq!(verdict.reason, VerdictReason::Convicted);
     }
 
     #[test]
-    fn a_benign_suppression_allows_a_corroborated_conviction() {
+    fn evidence_without_a_suppression_may_convict_alone() {
+        let config = Config::default();
+        let verdict = classify(
+            &input(vec![exact_convicting("abuseipdb", "abuseipdb")]),
+            &config,
+            now(),
+        );
+        assert_eq!(verdict.classification, Classification::Bad);
+        assert_eq!(voting_families(&verdict, &config), 1);
+    }
+
+    #[test]
+    fn benign_evidence_may_corroborate_but_not_convict_alone() {
+        let config = Config::default();
+        let mut input = input(vec![exact_convicting("abuseipdb", "abuseipdb")]);
+        input
+            .suppressions
+            .push((ProviderId::new("abuseipdb"), Suppression::Benign));
+        let verdict = classify(&input, &config, now());
+        assert_eq!(verdict.classification, Classification::Suspect);
+        assert_eq!(verdict.reason, VerdictReason::EvidencePresent);
+        assert_eq!(voting_families(&verdict, &config), 1);
+    }
+
+    #[test]
+    fn benign_evidence_still_corroborates() {
+        let config = Config::default();
         let mut input = input(vec![
-            exact_convicting("abuseipdb", "abuseipdb"),
-            exact_convicting("crowdsec", "crowdsec"),
+            exact_corroborating("abuseipdb", "abuseipdb"),
+            exact_corroborating("crowdsec", "crowdsec"),
         ]);
         input
             .suppressions
-            .push((ProviderId::new("crowdsec"), Suppression::Benign));
-        let verdict = classify(&input, &Config::default(), now());
+            .push((ProviderId::new("abuseipdb"), Suppression::Benign));
+        let verdict = classify(&input, &config, now());
         assert_eq!(verdict.classification, Classification::Bad);
+        assert_eq!(verdict.reason, VerdictReason::Convicted);
+        assert_eq!(voting_families(&verdict, &config), 2);
+    }
+
+    #[test]
+    fn safe_evidence_is_void() {
+        let config = Config::default();
+        let mut input = input(vec![exact_convicting("abuseipdb", "abuseipdb")]);
+        input
+            .suppressions
+            .push((ProviderId::new("abuseipdb"), Suppression::Safe));
+        input
+            .coverage
+            .record_success(ProviderId::new("abuseipdb"), CoverageLevel::Definitive);
+        let verdict = classify(&input, &config, now());
+        assert_eq!(verdict.classification, Classification::Unknown);
+        assert_eq!(verdict.reason, VerdictReason::NoEvidence);
+        assert!(verdict.evidence.is_empty());
+        assert_eq!(
+            verdict.suppressions,
+            vec![(ProviderId::new("abuseipdb"), Suppression::Safe)]
+        );
+        assert_eq!(voting_families(&verdict, &config), 0);
     }
 
     #[test]

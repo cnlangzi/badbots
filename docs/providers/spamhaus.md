@@ -57,8 +57,8 @@ the metadata object.
 | Field | Use |
 |---|---|
 | `cidr` | The network the observation covers, recorded as the scope |
-| `sblid` | Recorded as a raw value |
-| `rir` | Recorded as a raw value |
+| `sblid` | Recorded as an upstream value |
+| `rir` | Recorded as an upstream value |
 | `metadata.timestamp` | The publication time, the base of the expiry |
 | `metadata.copyright` | The attribution |
 | `metadata.terms` | The terms, part of the attribution |

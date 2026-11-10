@@ -63,13 +63,16 @@ async fn a_malicious_behavior_convicts() {
 
     let evidence = &verdict.evidence[0];
     assert_eq!(evidence.strength, EvidenceStrength::Convicting);
-    assert_eq!(evidence.raw_values.get("reputation").unwrap(), "malicious");
     assert_eq!(
-        evidence.raw_values.get("background_noise").unwrap(),
+        evidence.upstream_values.get("reputation").unwrap(),
+        "malicious"
+    );
+    assert_eq!(
+        evidence.upstream_values.get("background_noise").unwrap(),
         "medium"
     );
     assert_eq!(
-        evidence.raw_values.get("behaviors").unwrap(),
+        evidence.upstream_values.get("behaviors").unwrap(),
         "http:exploit"
     );
     assert!(verdict.suppression.is_none());
@@ -112,7 +115,7 @@ async fn a_false_positive_tag_suppresses_the_address() {
     assert_eq!(verdict.suppression, Some(Suppression::Safe));
     assert_eq!(
         verdict.evidence[0]
-            .raw_values
+            .upstream_values
             .get("false_positives")
             .unwrap(),
         "cdn:cloudflare_exit_node"
@@ -137,7 +140,7 @@ async fn a_community_blocklist_classification_convicts() {
     assert_eq!(verdict.evidence[0].strength, EvidenceStrength::Convicting);
     assert_eq!(
         verdict.evidence[0]
-            .raw_values
+            .upstream_values
             .get("classifications")
             .unwrap(),
         "community-blocklist"
@@ -152,7 +155,10 @@ async fn an_intelligence_blocklist_reference_convicts() {
     assert_eq!(verdict.evidence.len(), 1);
     assert_eq!(verdict.evidence[0].strength, EvidenceStrength::Convicting);
     assert_eq!(
-        verdict.evidence[0].raw_values.get("references").unwrap(),
+        verdict.evidence[0]
+            .upstream_values
+            .get("references")
+            .unwrap(),
         "list:crowdsec_intelligence_blocklist"
     );
 }

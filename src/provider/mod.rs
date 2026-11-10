@@ -114,7 +114,7 @@ pub trait LookupProvider: Send + Sync {
 
 /// A provider that publishes a list of addresses.
 ///
-/// An observation about an exact address carries that address in its raw
+/// An observation about an exact address carries that address in its upstream
 /// values under the key [`ADDRESS_KEY`](crate::index::ADDRESS_KEY), because the
 /// index resolves an address to its observations from the snapshot alone.
 #[async_trait]
