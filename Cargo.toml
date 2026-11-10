@@ -12,9 +12,12 @@ categories = ["security"]
 
 [features]
 default = []
-full = ["abuseipdb", "crowdsec"]
+full = ["abuseipdb", "blocklist_de", "crowdsec", "dshield", "spamhaus"]
 abuseipdb = []
+blocklist_de = []
 crowdsec = []
+dshield = []
+spamhaus = []
 
 [dependencies]
 async-trait = "0.1"
@@ -39,6 +42,11 @@ tokio = { version = "1", default-features = false, features = ["sync", "time"] }
 tracing = "0.1"
 
 [dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "gzip",
+    "json",
+] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 wiremock = "0.6"

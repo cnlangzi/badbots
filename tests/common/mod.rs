@@ -6,14 +6,38 @@ use std::sync::{Arc, Mutex};
 use badbots::Clock;
 use time::OffsetDateTime;
 
+/// Builds the HTTP client the tests use.
+///
+/// The client bypasses the proxy of the environment, because a proxy may
+/// rewrite the headers the tests assert on.
+pub fn client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .no_proxy()
+        .build()
+        .expect("the client is built")
+}
+
 /// Reads a fixture file.
 pub fn fixture(path: &str) -> String {
-    let path: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join(path);
+    let path = fixture_path(path);
     std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("fixture {} could not be read: {error}", path.display()))
+}
+
+/// Reads a fixture file that holds bytes.
+pub fn fixture_bytes(path: &str) -> Vec<u8> {
+    let path = fixture_path(path);
+    std::fs::read(&path)
+        .unwrap_or_else(|error| panic!("fixture {} could not be read: {error}", path.display()))
+}
+
+/// The path of a fixture file.
+fn fixture_path(path: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(path)
 }
 
 /// Replaces the timestamp placeholders of a fixture with the given instant.

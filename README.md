@@ -88,19 +88,55 @@ A provider that fails never discards the evidence of another provider. The
 failure is recorded in `coverage.failed` and the verdict is computed from the
 evidence that was gathered.
 
+A list provider is consulted about every address that is assessed. An address
+it produced an observation for is `definitive`, an address it did not match is
+`partial`.
+
 ## Providers
 
 | Provider | Feature | Capability | Quota guard | Convicts alone |
 |---|---|---|---|---|
 | [AbuseIPDB](docs/providers/abuseipdb.md) | `abuseipdb` | Primary | 1,000 per day | Yes, with score ≥ 75, ≥ 2 distinct reporters, a report within 30 days and an inbound-attack category |
 | [CrowdSec CTI](docs/providers/crowdsec.md) | `crowdsec` | Primary | 120 per month | Yes, with a malicious reputation and a malicious behavior, or a blocklist classification or reference |
+| [Spamhaus DROP](docs/providers/spamhaus.md) | `spamhaus` | Corroborating | 10,000 per day | No, a listing is a statement about a range |
+| [Blocklist.de](docs/providers/blocklist-de.md) | `blocklist_de` | Corroborating | 10,000 per day | No, only the attack count of the per-address query adds a vote |
+| [DShield](docs/providers/dshield.md) | `dshield` | Corroborating | 10,000 per day | No, only an attack record adds a vote |
 
-Both providers are opt-in twice over: the Cargo feature has to be compiled in
+Every provider is opt-in twice over: the Cargo feature has to be compiled in
 **and** the configuration has to enable the provider. A provider that is
 enabled in the configuration but whose feature is absent is reported as
 `ConfigError::MissingFeature` when the library is built.
 
 The `full` feature enables every provider the crate ships.
+
+## The list providers
+
+Three of the providers publish a list instead of answering about one address:
+Spamhaus DROP, the Blocklist.de service lists and DShield. The library never
+fetches a list on its own; the host decides when that happens:
+
+```rust
+let report = bots.refresh_feeds().await;
+```
+
+A refresh is off the request path, and the result of it is local state: the
+evidence of a list is reachable from `assess_ip` without any network I/O.
+
+Each list publisher states how often its list may be downloaded, and the
+library honours that interval. A refresh inside the interval issues no request
+and is reported with the time that is left. A refresh that fails keeps the
+list that was loaded before, so a publisher that is unreachable does not empty
+the index.
+
+| List | Refresh interval |
+|---|---|
+| Spamhaus DROP | 1 hour |
+| Blocklist.de service lists | 30 minutes |
+| DShield | 1 hour |
+
+A list never convicts an address on its own. Two observations of the same
+source family count as one vote, so a list and a mirror of it never make a
+verdict stronger.
 
 ## Operator policy mapping
 
@@ -146,12 +182,15 @@ below are publisher statements about the sources themselves:
 |---|---|
 | AbuseIPDB reports the abuse confidence score of an address together with the number of distinct reporters and the categories they chose | Publisher statement (upstream API documentation) |
 | CrowdSec CTI publishes a reputation, the observed behaviors and the classifications of an address | Publisher statement (upstream API documentation) |
+| Spamhaus DROP publishes the networks that professional spam and cyber-crime operations lease or steal | Publisher statement (upstream documentation) |
+| Blocklist.de publishes the attack events its partner's sensors observed, per address and per service | Publisher statement (upstream documentation) |
+| DShield publishes the subnets and the addresses its sensors saw scanning or attacking | Publisher statement (upstream documentation) |
 | The share of observed malicious traffic that carries a `Bad` verdict is in the single-digit percentage range | Expectation derived from the design of the sources. No independent measurement exists |
 
-The coverage is short by design. Both sources report addresses that a
-community has already flagged, a conviction needs either one strong claim or
-two independent claims, and the sources do not cover every attack category. A
-host that needs more coverage adds a provider rather than loosening the rules.
+The coverage is short by design. The sources report addresses that a community
+has already flagged, a conviction needs either one strong claim or two
+independent claims, and the sources do not cover every attack category. A host
+that needs more coverage adds a provider rather than loosening the rules.
 
 ## Staged rollout
 
