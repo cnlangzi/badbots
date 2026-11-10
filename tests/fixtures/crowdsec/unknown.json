@@ -1,0 +1,21 @@
+{
+  "ip": "45.32.1.1",
+  "reputation": "unknown",
+  "reputation_score": 0,
+  "background_noise": "medium",
+  "background_noise_score": 50,
+  "classifications": {
+    "false_positives": [],
+    "classifications": []
+  },
+  "behaviors": [],
+  "references": [],
+  "history": {
+    "first_seen": "2024-02-01T00:00:00+00:00",
+    "last_seen": "{{last_seen}}"
+  },
+  "scores": {
+    "http": 100,
+    "dns": 0
+  }
+}

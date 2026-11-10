@@ -1,0 +1,31 @@
+{
+  "data": {
+    "ipAddress": "45.32.1.1",
+    "isPublic": true,
+    "ipVersion": 4,
+    "isWhitelisted": false,
+    "abuseConfidenceScore": 100,
+    "countryCode": "US",
+    "usageType": "Data Center",
+    "isp": "Example Hosting",
+    "domain": "example-hosting.test",
+    "hostnames": [
+      "host.example-hosting.test"
+    ],
+    "isTor": false,
+    "totalReports": 12,
+    "numDistinctUsers": 5,
+    "lastReportedAt": "{{last_reported_at}}",
+    "reports": [
+      {
+        "reportedAt": "{{last_reported_at}}",
+        "comment": "Repeated web application attacks",
+        "categories": [
+          21
+        ],
+        "reporterCountryCode": "NL",
+        "reporterCount": 3
+      }
+    ]
+  }
+}

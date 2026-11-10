@@ -1,0 +1,51 @@
+[package]
+name = "badbots"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+description = "Evidence-based IP badness assessment for inbound traffic"
+repository = "https://github.com/cnlangzi/badbots"
+readme = "README.md"
+keywords = ["security", "ip", "reputation", "abuse", "bot"]
+categories = ["security"]
+
+[features]
+default = []
+full = ["abuseipdb", "crowdsec"]
+abuseipdb = []
+crowdsec = []
+
+[dependencies]
+async-trait = "0.1"
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+ipnet = { version = "2", features = ["serde"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "gzip",
+    "json",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+time = { version = "0.3", features = [
+    "formatting",
+    "macros",
+    "parsing",
+    "serde-human-readable",
+    "serde-well-known",
+] }
+tokio = { version = "1", default-features = false, features = ["sync", "time"] }
+tracing = "0.1"
+
+[dev-dependencies]
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+wiremock = "0.6"
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
