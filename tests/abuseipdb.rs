@@ -11,7 +11,9 @@ use std::time::Duration;
 use badbots::provider::abuseipdb::AbuseIpdbProvider;
 use badbots::provider::lookup::{ProviderRuntime, daily_guard};
 use badbots::provider::{LookupProvider, ProviderCapability};
-use badbots::{ApiKey, EvidenceStrength, ProviderError, ProviderId, SourceFamily};
+use badbots::{
+    ApiKey, CoverageLevel, EvidenceStrength, ProviderError, ProviderId, SourceFamily, Suppression,
+};
 use common::{fixture, render};
 use time::OffsetDateTime;
 use wiremock::matchers::{method, path};
@@ -65,23 +67,32 @@ async fn a_strong_recent_report_convicts() {
     assert_eq!(evidence.provider, ProviderId::ABUSEIPDB);
     assert_eq!(evidence.family, SourceFamily::ABUSEIPDB);
     assert_eq!(
-        evidence.raw_values.get("abuse_confidence_score").unwrap(),
+        evidence
+            .upstream_values
+            .get("abuse_confidence_score")
+            .unwrap(),
         "100"
     );
-    assert_eq!(evidence.raw_values.get("num_distinct_users").unwrap(), "5");
-    assert_eq!(evidence.raw_values.get("total_reports").unwrap(), "12");
-    assert_eq!(evidence.raw_values.get("categories").unwrap(), "21");
     assert_eq!(
-        evidence.raw_values.get("usage_type").unwrap(),
+        evidence.upstream_values.get("num_distinct_users").unwrap(),
+        "5"
+    );
+    assert_eq!(evidence.upstream_values.get("total_reports").unwrap(), "12");
+    assert_eq!(evidence.upstream_values.get("categories").unwrap(), "21");
+    assert_eq!(
+        evidence.upstream_values.get("usage_type").unwrap(),
         "Data Center"
     );
-    assert_eq!(evidence.raw_values.get("country_code").unwrap(), "US");
-    assert_eq!(evidence.raw_values.get("isp").unwrap(), "Example Hosting");
+    assert_eq!(evidence.upstream_values.get("country_code").unwrap(), "US");
     assert_eq!(
-        evidence.raw_values.get("domain").unwrap(),
+        evidence.upstream_values.get("isp").unwrap(),
+        "Example Hosting"
+    );
+    assert_eq!(
+        evidence.upstream_values.get("domain").unwrap(),
         "example-hosting.test"
     );
-    assert_eq!(evidence.raw_values.get("is_tor").unwrap(), "false");
+    assert_eq!(evidence.upstream_values.get("is_tor").unwrap(), "false");
     assert!(verdict.suppression.is_none());
 }
 
@@ -138,8 +149,19 @@ async fn an_old_report_does_not_convict() {
 }
 
 #[tokio::test]
-async fn a_whitelisted_address_still_convicts() {
+async fn a_whitelisted_address_is_suppressed() {
     let (_server, provider) = provider_for("whitelisted.json").await;
+    let verdict = provider.lookup(ip()).await.expect("the lookup succeeds");
+
+    assert!(verdict.evidence.is_empty());
+    assert_eq!(verdict.suppression, Some(Suppression::Safe));
+    assert_eq!(verdict.coverage, CoverageLevel::Definitive);
+    assert!(verdict.expires_at.is_none());
+}
+
+#[tokio::test]
+async fn an_absent_whitelist_flag_leaves_the_conviction_rule_unchanged() {
+    let (_server, provider) = provider_for("absent_whitelist_flag.json").await;
     let verdict = provider.lookup(ip()).await.expect("the lookup succeeds");
 
     assert_eq!(verdict.evidence.len(), 1);
@@ -147,9 +169,19 @@ async fn a_whitelisted_address_still_convicts() {
     assert!(verdict.suppression.is_none());
     assert!(
         !verdict.evidence[0]
-            .raw_values
+            .upstream_values
             .contains_key("is_whitelisted")
     );
+}
+
+#[tokio::test]
+async fn a_null_whitelist_flag_leaves_the_conviction_rule_unchanged() {
+    let (_server, provider) = provider_for("null_whitelist_flag.json").await;
+    let verdict = provider.lookup(ip()).await.expect("the lookup succeeds");
+
+    assert_eq!(verdict.evidence.len(), 1);
+    assert_eq!(verdict.evidence[0].strength, EvidenceStrength::Convicting);
+    assert!(verdict.suppression.is_none());
 }
 
 #[tokio::test]

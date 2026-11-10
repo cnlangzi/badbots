@@ -114,9 +114,9 @@ impl LookupProvider for BlocklistDeQueryProvider {
         let attacks = parsed.attacks.unwrap_or_default();
         let reports = parsed.reports.unwrap_or_default();
 
-        let mut raw_values: BTreeMap<String, String> = BTreeMap::new();
-        raw_values.insert("attacks".to_string(), attacks.to_string());
-        raw_values.insert("reports".to_string(), reports.to_string());
+        let mut upstream_values: BTreeMap<String, String> = BTreeMap::new();
+        upstream_values.insert("attacks".to_string(), attacks.to_string());
+        upstream_values.insert("reports".to_string(), reports.to_string());
 
         if attacks < MIN_ATTACK_EVENTS {
             return Ok(ProviderVerdict {
@@ -134,7 +134,7 @@ impl LookupProvider for BlocklistDeQueryProvider {
             family: SourceFamily::BLOCKLIST_DE,
             assertion: Assertion::Attack,
             category: ThreatCategory::GenericAbuse,
-            raw_category: None,
+            upstream_category: None,
             strength: EvidenceStrength::Corroborating,
             scope: MatchScope::Exact,
             observed_at: Some(now),
@@ -143,7 +143,7 @@ impl LookupProvider for BlocklistDeQueryProvider {
             expires_at: Some(expires_at),
             observation_window: Some(ObservationWindow { start, end: now }),
             count: Some(attacks),
-            raw_values,
+            upstream_values,
         };
 
         Ok(ProviderVerdict {
@@ -333,17 +333,17 @@ pub fn parse_service_list(body: &str) -> Result<Vec<IpAddr>, ProviderError> {
 
 /// The observation of one address of a service list.
 fn observation_for(service: &str, address: IpAddr, now: OffsetDateTime) -> Evidence {
-    let mut raw_values: BTreeMap<String, String> = BTreeMap::new();
-    raw_values.insert(ADDRESS_KEY.to_string(), address.to_string());
-    raw_values.insert("service".to_string(), service.to_string());
-    raw_values.insert("entry_observed_at".to_string(), "none".to_string());
+    let mut upstream_values: BTreeMap<String, String> = BTreeMap::new();
+    upstream_values.insert(ADDRESS_KEY.to_string(), address.to_string());
+    upstream_values.insert("service".to_string(), service.to_string());
+    upstream_values.insert("entry_observed_at".to_string(), "none".to_string());
 
     Evidence {
         provider: ProviderId::BLOCKLIST_DE_LISTS,
         family: SourceFamily::BLOCKLIST_DE,
         assertion: assertion_of(service),
         category: category_of(service),
-        raw_category: None,
+        upstream_category: None,
         strength: EvidenceStrength::Indicative,
         scope: MatchScope::Exact,
         observed_at: Some(now),
@@ -352,6 +352,6 @@ fn observation_for(service: &str, address: IpAddr, now: OffsetDateTime) -> Evide
         expires_at: Some(now + validity_of(service)),
         observation_window: None,
         count: None,
-        raw_values,
+        upstream_values,
     }
 }

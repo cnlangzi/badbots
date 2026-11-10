@@ -61,7 +61,8 @@ The upstream reports, per address:
 | `totalReports` | Rule input, recorded as `total_reports` |
 | `reports[].categories` | Rule input, recorded as `categories` |
 | `lastReportedAt` | `observed_at`, the base of the expiry |
-| `usageType`, `countryCode`, `isp`, `domain`, `isTor` | Recorded as raw values |
+| `usageType`, `countryCode`, `isp`, `domain`, `isTor` | Recorded as upstream values |
+| `isWhitelisted` | Suppression, not recorded as an upstream value |
 
 The categories that belong to the inbound attack set, and therefore count as an
 attack on this address:
@@ -83,13 +84,15 @@ attack on this address:
 
 Category 14 (Port Scan) is recorded as reconnaissance and category 10, 11 and 12
 (spam) as abuse; neither belongs to the inbound attack set. The remaining
-upstream categories are not emitted as evidence. The raw category identifiers
-are always preserved in `raw_values["categories"]`.
+upstream categories are not emitted as evidence. The upstream category
+identifiers are always preserved in `upstream_values["categories"]`.
 
-The `isWhitelisted` field of the upstream is not mapped to a raw value and
-produces no suppression. The upstream publishes it as a statement about its own
-data, and a statement about the upstream's data is not evidence about the
-address.
+The upstream publishes a whitelist flag for the addresses it considers
+legitimate. The provider consumes the flag: it withdraws its own claim about the
+address, publishes a `Safe` suppression and produces no evidence. The flag is
+not recorded as an upstream value. A suppression speaks for the provider that
+published it, so the whitelist withdraws the AbuseIPDB claim alone; an address
+that another source family convicts is still convicted.
 
 ## Freshness
 
@@ -107,9 +110,10 @@ window is recorded.
 The upstream publishes its own terms of service and API documentation. A host
 that uses this provider is bound by those terms; this library does not
 restate or reinterpret them. The upstream names itself in the fields it
-returns, and this library preserves those fields in the raw values of the
+returns, and this library preserves those fields in the upstream values of the
 verdict so that an attribution requirement can be met from the evidence the
-host already stores.
+host already stores. A whitelisted address yields no observation, so the
+upstream values of that address do not reach the verdict.
 
 ## Known false-positive profile
 
@@ -118,14 +122,17 @@ reported for a single incident carries a high confidence score. The following
 patterns are known to produce a conviction that a host may disagree with:
 
 - Hosting and VPN ranges that receive abuse reports from a shared customer
-  base. The upstream reports `usageType`, `isp` and `domain` in the raw values
-  of the verdict, which is where a host recognizes such a range.
-- Tor exit nodes. The upstream reports `isTor` in the raw values.
+  base. The upstream reports `usageType`, `isp` and `domain` in the upstream
+  values of the verdict, which is where a host recognizes such a range.
+- Tor exit nodes. The upstream reports `isTor` in the upstream values.
 - Scanner services that are reported because they scan. The library requires a
   category of the inbound attack set, so a port scan alone produces no
   evidence.
+- Addresses the upstream whitelists. The provider withdraws its own claim about
+  them and produces no evidence; the verdict carries the suppression.
 
 A conviction needs a score of at least 75, at least two distinct reporters, a
 report within 30 days and a category of the inbound attack set. A host that
 sees false positives in a specific range can exclude that range from its own
-policy: the verdict carries the raw values that make the exclusion decidable.
+policy: the verdict carries the upstream values that make the exclusion
+decidable.

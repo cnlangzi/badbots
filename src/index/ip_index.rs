@@ -15,10 +15,10 @@ use ipnet::IpNet;
 
 use crate::model::{Evidence, MatchScope, normalize};
 
-/// The raw value that carries the address an exact observation is about.
+/// The upstream value that carries the address an exact observation is about.
 ///
 /// A snapshot holds observations and nothing else, so an observation about an
-/// exact address records that address in its raw values for the index to
+/// exact address records that address in its upstream values for the index to
 /// resolve it.
 pub const ADDRESS_KEY: &str = "address";
 
@@ -130,7 +130,7 @@ impl IpIndex {
 
 /// The address an exact observation is about.
 fn address_of(entry: &Evidence) -> Option<IpAddr> {
-    let address = entry.raw_values.get(ADDRESS_KEY)?;
+    let address = entry.upstream_values.get(ADDRESS_KEY)?;
     address.parse().ok().map(normalize)
 }
 
@@ -148,14 +148,14 @@ mod tests {
     };
 
     fn exact(address: &str) -> Evidence {
-        let mut raw_values = BTreeMap::new();
-        raw_values.insert(super::ADDRESS_KEY.to_string(), address.to_string());
+        let mut upstream_values = BTreeMap::new();
+        upstream_values.insert(super::ADDRESS_KEY.to_string(), address.to_string());
         Evidence {
             provider: ProviderId::new("test"),
             family: SourceFamily::new("test"),
             assertion: Assertion::Attack,
             category: ThreatCategory::WebAttack,
-            raw_category: None,
+            upstream_category: None,
             strength: EvidenceStrength::Indicative,
             scope: MatchScope::Exact,
             observed_at: None,
@@ -164,7 +164,7 @@ mod tests {
             expires_at: None,
             observation_window: None,
             count: None,
-            raw_values,
+            upstream_values,
         }
     }
 
@@ -174,7 +174,7 @@ mod tests {
             family: SourceFamily::new("test"),
             assertion: Assertion::NetworkControl,
             category: ThreatCategory::MaliciousNetwork,
-            raw_category: None,
+            upstream_category: None,
             strength: EvidenceStrength::Indicative,
             scope: MatchScope::Prefix {
                 network: network.parse::<IpNet>().unwrap(),
@@ -185,7 +185,7 @@ mod tests {
             expires_at: None,
             observation_window: None,
             count: None,
-            raw_values: BTreeMap::new(),
+            upstream_values: BTreeMap::new(),
         }
     }
 
@@ -279,7 +279,7 @@ mod tests {
     #[test]
     fn an_observation_without_an_address_is_not_indexed() {
         let mut entry = exact("45.32.1.1");
-        entry.raw_values.clear();
+        entry.upstream_values.clear();
         let index = IpIndex::build(&[entry]);
 
         assert!(index.is_empty());

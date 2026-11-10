@@ -201,14 +201,22 @@ impl MatchScope {
     }
 }
 
-/// A provider-side statement that an address should not be treated as hostile.
+/// A provider-side statement about its own claim on an address.
+///
+/// A suppression speaks for the provider that published it. It constrains the
+/// evidence of that provider alone and never the evidence of another provider.
+///
+/// `Safe` is the stronger of the two, so a provider that published both is
+/// treated as `Safe`. The strength is a rule of the engine, not of the order
+/// the variants are declared in.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Suppression {
-    /// A hard suppression: prevents `Bad` outright.
+    /// The provider disowns its own claim: its evidence is void and neither
+    /// convicts on its own nor corroborates.
     Safe,
-    /// A weak suppression: prevents single-source conviction but allows
-    /// conviction by corroboration.
+    /// The provider's claim is too weak to convict on its own: its evidence may
+    /// still corroborate.
     Benign,
 }
 
@@ -225,6 +233,9 @@ pub struct ObservationWindow {
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct Evidence {
     /// The provider that produced the observation.
+    ///
+    /// A suppression applies to the observations of the provider that published
+    /// it, so this id is the key the engine matches a suppression against.
     pub provider: ProviderId,
     /// The upstream data lineage the observation belongs to.
     pub family: SourceFamily,
@@ -233,7 +244,7 @@ pub struct Evidence {
     /// The kind of activity the source reports.
     pub category: ThreatCategory,
     /// The upstream category label, when the source publishes one.
-    pub raw_category: Option<String>,
+    pub upstream_category: Option<String>,
     /// How far the observation may carry the verdict.
     pub strength: EvidenceStrength,
     /// What the observation applies to.
@@ -251,7 +262,7 @@ pub struct Evidence {
     /// The number of events the source counted.
     pub count: Option<u32>,
     /// The upstream values the observation was derived from.
-    pub raw_values: BTreeMap<String, String>,
+    pub upstream_values: BTreeMap<String, String>,
 }
 
 impl Evidence {

@@ -92,16 +92,16 @@ impl FeedProvider for ScriptedProvider {
 
 /// One observation of a scripted snapshot.
 fn observation(address: &str, generation: &str) -> Evidence {
-    let mut raw_values = BTreeMap::new();
-    raw_values.insert("address".to_string(), address.to_string());
-    raw_values.insert("generation".to_string(), generation.to_string());
+    let mut upstream_values = BTreeMap::new();
+    upstream_values.insert("address".to_string(), address.to_string());
+    upstream_values.insert("generation".to_string(), generation.to_string());
 
     Evidence {
         provider: ProviderId::new("scripted"),
         family: SourceFamily::new("scripted"),
         assertion: badbots::Assertion::Attack,
         category: badbots::ThreatCategory::WebAttack,
-        raw_category: None,
+        upstream_category: None,
         strength: EvidenceStrength::Corroborating,
         scope: MatchScope::Exact,
         observed_at: None,
@@ -110,7 +110,7 @@ fn observation(address: &str, generation: &str) -> Evidence {
         expires_at: None,
         observation_window: None,
         count: None,
-        raw_values,
+        upstream_values,
     }
 }
 
@@ -329,7 +329,7 @@ async fn a_replaced_list_is_never_seen_half_parsed() {
                     .iter()
                     .map(|evidence| {
                         evidence
-                            .raw_values
+                            .upstream_values
                             .get("generation")
                             .cloned()
                             .unwrap_or_default()

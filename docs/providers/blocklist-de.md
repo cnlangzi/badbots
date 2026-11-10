@@ -63,7 +63,7 @@ of abuse notifications that were sent to the address's provider.
 | Field | Use |
 |---|---|
 | `attacks` | The number of events, the count of the observation |
-| `reports` | The number of abuse notifications, recorded as a raw value only |
+| `reports` | The number of abuse notifications, recorded as an upstream value only |
 
 The publisher writes the counts as numbers when they are zero and as strings
 when they are not, so both shapes are read.

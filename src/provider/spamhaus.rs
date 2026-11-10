@@ -175,12 +175,12 @@ pub fn parse_drop_list(body: &str, now: OffsetDateTime) -> Result<DropList, Prov
             .parse::<IpNet>()
             .map_err(|error| ProviderError::Parse(error.to_string()))?;
 
-        let mut raw_values: BTreeMap<String, String> = BTreeMap::new();
+        let mut upstream_values: BTreeMap<String, String> = BTreeMap::new();
         if let Some(sblid) = entry.sblid {
-            raw_values.insert("sblid".to_string(), sblid);
+            upstream_values.insert("sblid".to_string(), sblid);
         }
         if let Some(rir) = entry.rir {
-            raw_values.insert("rir".to_string(), rir);
+            upstream_values.insert("rir".to_string(), rir);
         }
 
         entries.push(Evidence {
@@ -188,7 +188,7 @@ pub fn parse_drop_list(body: &str, now: OffsetDateTime) -> Result<DropList, Prov
             family: SourceFamily::SPAMHAUS,
             assertion: Assertion::NetworkControl,
             category: ThreatCategory::MaliciousNetwork,
-            raw_category: None,
+            upstream_category: None,
             strength: EvidenceStrength::Corroborating,
             scope: MatchScope::Prefix { network },
             observed_at: None,
@@ -197,7 +197,7 @@ pub fn parse_drop_list(body: &str, now: OffsetDateTime) -> Result<DropList, Prov
             expires_at,
             observation_window: None,
             count: None,
-            raw_values,
+            upstream_values,
         });
     }
 

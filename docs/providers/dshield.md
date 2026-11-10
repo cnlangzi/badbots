@@ -66,10 +66,10 @@ The interval is configurable through `DShieldConfig::min_refresh_interval`.
 
 | Column | Use |
 |---|---|
-| Start address, end address | Recorded as raw values |
+| Start address, end address | Recorded as upstream values |
 | Prefix length | The network the observation covers |
 | Targets count | The number of targets that saw activity, the count of the observation |
-| Network name, country, contact address | Recorded as raw values |
+| Network name, country, contact address | Recorded as upstream values |
 
 A record describes a range, so it produces an `Indicative` observation with the
 scope `Prefix`, the assertion `Reconnaissance` and the threat category
@@ -80,11 +80,11 @@ the rest of the file still describes usable observations.
 
 | Column | Use |
 |---|---|
-| First seen date | Recorded as a raw value |
+| First seen date | Recorded as an upstream value |
 | Last seen date | The observation time, the base of the expiry |
 | Address | The address the observation is about |
 | Label | The kind of activity, the rule input |
-| Country | Recorded as a raw value |
+| Country | Recorded as an upstream value |
 
 An address that was last seen outside the last seven days is not an
 observation any more.

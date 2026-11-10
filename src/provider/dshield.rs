@@ -188,20 +188,20 @@ pub fn parse_block_list(body: &str, now: OffsetDateTime) -> Result<ParsedList, P
         };
         let network = network.trunc();
 
-        let mut raw_values: BTreeMap<String, String> = BTreeMap::new();
-        raw_values.insert("range_start".to_string(), columns[0].trim().to_string());
-        raw_values.insert("range_end".to_string(), columns[1].trim().to_string());
-        raw_values.insert("targets".to_string(), count.to_string());
-        insert_value(&mut raw_values, "network", columns[4]);
-        insert_value(&mut raw_values, "country", columns[5]);
-        insert_value(&mut raw_values, "contact", columns[6]);
+        let mut upstream_values: BTreeMap<String, String> = BTreeMap::new();
+        upstream_values.insert("range_start".to_string(), columns[0].trim().to_string());
+        upstream_values.insert("range_end".to_string(), columns[1].trim().to_string());
+        upstream_values.insert("targets".to_string(), count.to_string());
+        insert_value(&mut upstream_values, "network", columns[4]);
+        insert_value(&mut upstream_values, "country", columns[5]);
+        insert_value(&mut upstream_values, "contact", columns[6]);
 
         entries.push(Evidence {
             provider: ProviderId::DSHIELD,
             family: SourceFamily::DSHIELD,
             assertion: Assertion::Reconnaissance,
             category: ThreatCategory::Scanner,
-            raw_category: None,
+            upstream_category: None,
             strength: EvidenceStrength::Indicative,
             scope: MatchScope::Prefix { network },
             observed_at: None,
@@ -210,7 +210,7 @@ pub fn parse_block_list(body: &str, now: OffsetDateTime) -> Result<ParsedList, P
             expires_at: Some(end + BLOCK_WINDOW),
             observation_window: Some(ObservationWindow { start, end }),
             count: Some(count),
-            raw_values,
+            upstream_values,
         });
     }
 
@@ -313,18 +313,18 @@ fn observation_for(
         }
     };
 
-    let mut raw_values: BTreeMap<String, String> = BTreeMap::new();
-    raw_values.insert(ADDRESS_KEY.to_string(), address.to_string());
-    raw_values.insert("label".to_string(), label.to_string());
-    raw_values.insert("firstseen".to_string(), columns[0].trim().to_string());
-    insert_value(&mut raw_values, "country", columns[4]);
+    let mut upstream_values: BTreeMap<String, String> = BTreeMap::new();
+    upstream_values.insert(ADDRESS_KEY.to_string(), address.to_string());
+    upstream_values.insert("label".to_string(), label.to_string());
+    upstream_values.insert("firstseen".to_string(), columns[0].trim().to_string());
+    insert_value(&mut upstream_values, "country", columns[4]);
 
     Some(Evidence {
         provider: ProviderId::DSHIELD,
         family,
         assertion,
         category,
-        raw_category: Some(label.to_string()),
+        upstream_category: Some(label.to_string()),
         strength,
         scope: MatchScope::Exact,
         observed_at: Some(last_seen),
@@ -333,7 +333,7 @@ fn observation_for(
         expires_at: Some(last_seen + THREATINTEL_WINDOW),
         observation_window: None,
         count: None,
-        raw_values,
+        upstream_values,
     })
 }
 
@@ -384,12 +384,12 @@ fn find_update(line: &str) -> Option<usize> {
 }
 
 /// Records a value the publisher left empty.
-fn insert_value(raw_values: &mut BTreeMap<String, String>, key: &str, value: &str) {
+fn insert_value(upstream_values: &mut BTreeMap<String, String>, key: &str, value: &str) {
     let value = value.trim();
     if value.is_empty() || value == "-" || value == "None" {
         return;
     }
-    raw_values.insert(key.to_string(), value.to_string());
+    upstream_values.insert(key.to_string(), value.to_string());
 }
 
 /// The service a label of another publisher names.

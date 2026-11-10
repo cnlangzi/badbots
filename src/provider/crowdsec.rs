@@ -197,26 +197,26 @@ impl LookupProvider for CrowdSecProvider {
         let suppressive_reputation = reputation == rules::crowdsec::REPUTATION_BENIGN
             || reputation == rules::crowdsec::REPUTATION_SAFE;
 
-        let mut raw_values: BTreeMap<String, String> = BTreeMap::new();
-        raw_values.insert("reputation".to_string(), reputation.clone());
+        let mut upstream_values: BTreeMap<String, String> = BTreeMap::new();
+        upstream_values.insert("reputation".to_string(), reputation.clone());
         if let Some(score) = parsed.reputation_score {
-            raw_values.insert("reputation_score".to_string(), score.to_string());
+            upstream_values.insert("reputation_score".to_string(), score.to_string());
         }
-        raw_values.insert("background_noise".to_string(), background_noise.clone());
+        upstream_values.insert("background_noise".to_string(), background_noise.clone());
         if let Some(score) = parsed.background_noise_score {
-            raw_values.insert("background_noise_score".to_string(), score.to_string());
+            upstream_values.insert("background_noise_score".to_string(), score.to_string());
         }
         if !false_positives.is_empty() {
-            raw_values.insert("false_positives".to_string(), false_positives.join(","));
+            upstream_values.insert("false_positives".to_string(), false_positives.join(","));
         }
         if !classifications.is_empty() {
-            raw_values.insert("classifications".to_string(), classifications.join(","));
+            upstream_values.insert("classifications".to_string(), classifications.join(","));
         }
         if !references.is_empty() {
-            raw_values.insert("references".to_string(), references.join(","));
+            upstream_values.insert("references".to_string(), references.join(","));
         }
         if !behaviors.is_empty() {
-            raw_values.insert(
+            upstream_values.insert(
                 "behaviors".to_string(),
                 behaviors
                     .iter()
@@ -228,15 +228,15 @@ impl LookupProvider for CrowdSecProvider {
         if let Some(history) = &parsed.history
             && let Some(first_seen) = &history.first_seen
         {
-            raw_values.insert("first_seen".to_string(), first_seen.clone());
+            upstream_values.insert("first_seen".to_string(), first_seen.clone());
         }
         if let Some(history) = &parsed.history
             && let Some(last_seen) = &history.last_seen
         {
-            raw_values.insert("last_seen".to_string(), last_seen.clone());
+            upstream_values.insert("last_seen".to_string(), last_seen.clone());
         }
         if let Some(scores) = &parsed.scores {
-            raw_values.insert(
+            upstream_values.insert(
                 "scores".to_string(),
                 serde_json::to_string(scores).unwrap_or_default(),
             );
@@ -309,7 +309,7 @@ impl LookupProvider for CrowdSecProvider {
             family: SourceFamily::CROWDSEC,
             assertion,
             category,
-            raw_category: behavior.as_ref().and_then(|behavior| behavior.name.clone()),
+            upstream_category: behavior.as_ref().and_then(|behavior| behavior.name.clone()),
             strength,
             scope: MatchScope::Exact,
             observed_at: last_seen,
@@ -318,7 +318,7 @@ impl LookupProvider for CrowdSecProvider {
             expires_at: Some(expires_at),
             observation_window,
             count: behavior.as_ref().and_then(|behavior| behavior.count),
-            raw_values,
+            upstream_values,
         };
 
         Ok(ProviderVerdict {

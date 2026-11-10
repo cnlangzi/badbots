@@ -557,12 +557,11 @@ impl BadBots {
                 ProviderCapability::ContextOnly => continue,
             }
             evidence.family = provider.family();
+            evidence.provider = provider.id();
             input.evidence.push(evidence);
         }
         if let Some(suppression) = verdict.suppression {
-            input
-                .suppressions
-                .push((verdict.provider.clone(), suppression));
+            input.suppressions.push((provider.id(), suppression));
         }
         input
             .coverage
