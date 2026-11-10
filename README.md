@@ -80,7 +80,7 @@ nothing" from "never checked".
 
 | Level | Meaning |
 |---|---|
-| `definitive` | The provider evaluated this exact address and returned a verdict, including "no malicious evidence". |
+| `definitive` | The provider evaluated this address and returned a verdict, including "no malicious evidence". |
 | `partial` | The provider was consulted but its statement about this address is weak. |
 | `failed` | The provider errored, timed out, was rate limited or exhausted its budget. |
 
@@ -124,9 +124,10 @@ evidence of a list is reachable from `assess_ip` without any network I/O.
 
 Each list publisher states how often its list may be downloaded, and the
 library honours that interval. A refresh inside the interval issues no request
-and is reported with the time that is left. A refresh that fails keeps the
-list that was loaded before, so a publisher that is unreachable does not empty
-the index.
+and is reported with the time that is left. The interval applies to a failed
+refresh as well, so a publisher that is unreachable is not asked again and
+again. A refresh that fails keeps the list that was loaded before, so a
+publisher that is unreachable does not empty the index.
 
 | List | Refresh interval |
 |---|---|
@@ -137,6 +138,13 @@ the index.
 A list never convicts an address on its own. Two observations of the same
 source family count as one vote, so a list and a mirror of it never make a
 verdict stronger.
+
+The publisher of a list may ask for its credit and its terms to be
+reproduced. The loaded list keeps them verbatim:
+
+```rust
+let attribution = bots.feed_attribution(&badbots::ProviderId::SPAMHAUS);
+```
 
 ## Operator policy mapping
 

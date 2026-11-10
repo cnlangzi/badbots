@@ -4,6 +4,9 @@
 //! exact address in a map, and the observations about a network in one bucket
 //! per prefix length. A lookup returns the observations about the exact address
 //! and the observations of the most specific network that contains it.
+//!
+//! The index holds the positions of the observations rather than the
+//! observations themselves, so that a snapshot is not copied into the index.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -22,51 +25,59 @@ pub const ADDRESS_KEY: &str = "address";
 /// The observations of one feed, indexed for lookup.
 #[derive(Clone, Debug, Default)]
 pub struct IpIndex {
-    exact: HashMap<IpAddr, Vec<Evidence>>,
-    prefixes: HashMap<u8, Vec<(IpNet, Vec<Evidence>)>>,
+    exact: HashMap<IpAddr, Vec<usize>>,
+    prefixes: HashMap<u8, Vec<(IpNet, Vec<usize>)>>,
 }
 
 impl IpIndex {
-    /// Builds an index from the observations of a snapshot.
+    /// Builds an index over the observations of a snapshot.
+    ///
+    /// An observation about an exact address that does not record its address
+    /// is not indexed, because the index cannot resolve it.
     pub fn build(entries: &[Evidence]) -> Self {
         let mut index = Self::default();
 
-        for entry in entries {
+        for (position, entry) in entries.iter().enumerate() {
             match entry.scope {
                 MatchScope::Exact => {
                     let Some(address) = address_of(entry) else {
+                        tracing::warn!(
+                            provider = %entry.provider,
+                            "an observation about an exact address does not record its address"
+                        );
                         continue;
                     };
-                    index.exact.entry(address).or_default().push(entry.clone());
+                    index.exact.entry(address).or_default().push(position);
                 }
                 MatchScope::Prefix { network } => {
                     let network = network.trunc();
-                    index
-                        .prefixes
-                        .entry(network.prefix_len())
-                        .or_default()
-                        .push((network, vec![entry.clone()]));
+                    let bucket = index.prefixes.entry(network.prefix_len()).or_default();
+                    match bucket.iter_mut().find(|(listed, _)| *listed == network) {
+                        Some((_, positions)) => positions.push(position),
+                        None => bucket.push((network, vec![position])),
+                    }
                 }
             }
         }
 
         for bucket in index.prefixes.values_mut() {
-            bucket.sort_by_key(|entry| entry.0);
+            bucket.sort_by_key(|(network, _)| *network);
         }
 
         index
     }
 
-    /// The observations that apply to an address.
+    /// The positions of the observations that apply to an address.
     ///
-    /// The observations about the exact address come first, followed by the
-    /// observations of the most specific network that contains the address.
-    pub fn lookup(&self, ip: IpAddr) -> Vec<Evidence> {
+    /// The positions are the ones of the observations the index was built
+    /// from. The observations about the exact address come first, followed by
+    /// the observations of the most specific network that contains it.
+    pub fn matches(&self, ip: IpAddr) -> Vec<usize> {
         let ip = normalize(ip);
         let mut found = self.exact.get(&ip).cloned().unwrap_or_default();
 
-        if let Some((_, observations)) = self.longest_prefix(ip) {
-            found.extend(observations.iter().cloned());
+        if let Some(positions) = self.longest_prefix(ip) {
+            found.extend(positions.iter().copied());
         }
 
         found
@@ -78,7 +89,12 @@ impl IpIndex {
             + self
                 .prefixes
                 .values()
-                .map(|bucket| bucket.len())
+                .map(|bucket| {
+                    bucket
+                        .iter()
+                        .map(|(_, positions)| positions.len())
+                        .sum::<usize>()
+                })
                 .sum::<usize>()
     }
 
@@ -88,7 +104,7 @@ impl IpIndex {
     }
 
     /// The most specific network that contains the address.
-    fn longest_prefix(&self, ip: IpAddr) -> Option<&(IpNet, Vec<Evidence>)> {
+    fn longest_prefix(&self, ip: IpAddr) -> Option<&Vec<usize>> {
         let longest = match ip {
             IpAddr::V4(_) => 32,
             IpAddr::V6(_) => 128,
@@ -104,7 +120,7 @@ impl IpIndex {
             let network = network.trunc();
 
             if let Ok(position) = bucket.binary_search_by(|probe| probe.0.cmp(&network)) {
-                return Some(&bucket[position]);
+                return Some(&bucket[position].1);
             }
         }
 
@@ -179,12 +195,13 @@ mod tests {
 
     #[test]
     fn the_most_specific_network_wins() {
-        let index = IpIndex::build(&[prefix("45.32.0.0/16"), prefix("45.32.1.0/24")]);
-        let found = index.lookup(address("45.32.1.1"));
+        let entries = [prefix("45.32.0.0/16"), prefix("45.32.1.0/24")];
+        let index = IpIndex::build(&entries);
+        let found = index.matches(address("45.32.1.1"));
 
         assert_eq!(found.len(), 1);
         assert_eq!(
-            found[0].scope,
+            entries[found[0]].scope,
             MatchScope::Prefix {
                 network: "45.32.1.0/24".parse::<IpNet>().unwrap()
             }
@@ -193,12 +210,13 @@ mod tests {
 
     #[test]
     fn a_shorter_network_is_used_when_no_longer_one_matches() {
-        let index = IpIndex::build(&[prefix("45.32.0.0/16")]);
-        let found = index.lookup(address("45.32.1.1"));
+        let entries = [prefix("45.32.0.0/16")];
+        let index = IpIndex::build(&entries);
+        let found = index.matches(address("45.32.1.1"));
 
         assert_eq!(found.len(), 1);
         assert_eq!(
-            found[0].scope,
+            entries[found[0]].scope,
             MatchScope::Prefix {
                 network: "45.32.0.0/16".parse::<IpNet>().unwrap()
             }
@@ -206,23 +224,44 @@ mod tests {
     }
 
     #[test]
+    fn every_observation_of_a_network_is_found() {
+        let entries = [prefix("45.32.0.0/16"), prefix("45.32.0.0/16")];
+        let index = IpIndex::build(&entries);
+        let found = index.matches(address("45.32.1.1"));
+
+        assert_eq!(found.len(), 2);
+        assert_eq!(index.len(), 2);
+    }
+
+    #[test]
     fn an_exact_address_is_resolved() {
-        let index = IpIndex::build(&[exact("45.32.1.1")]);
-        let found = index.lookup(address("45.32.1.1"));
+        let entries = [exact("45.32.1.1")];
+        let index = IpIndex::build(&entries);
+        let found = index.matches(address("45.32.1.1"));
 
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].scope, MatchScope::Exact);
-        assert!(index.lookup(address("45.32.1.2")).is_empty());
+        assert_eq!(entries[found[0]].scope, MatchScope::Exact);
+        assert!(index.matches(address("45.32.1.2")).is_empty());
+    }
+
+    #[test]
+    fn an_exact_address_and_its_network_are_both_found() {
+        let entries = [exact("45.32.1.1"), prefix("45.32.0.0/16")];
+        let index = IpIndex::build(&entries);
+        let found = index.matches(address("45.32.1.1"));
+
+        assert_eq!(found.len(), 2);
     }
 
     #[test]
     fn an_ipv6_prefix_is_matched() {
-        let index = IpIndex::build(&[prefix("2001:db8::/32"), prefix("2001:db8:1::/48")]);
-        let found = index.lookup(address("2001:db8:1::1"));
+        let entries = [prefix("2001:db8::/32"), prefix("2001:db8:1::/48")];
+        let index = IpIndex::build(&entries);
+        let found = index.matches(address("2001:db8:1::1"));
 
         assert_eq!(found.len(), 1);
         assert_eq!(
-            found[0].scope,
+            entries[found[0]].scope,
             MatchScope::Prefix {
                 network: "2001:db8:1::/48".parse::<IpNet>().unwrap()
             }
@@ -231,8 +270,10 @@ mod tests {
 
     #[test]
     fn an_address_of_the_other_family_never_matches() {
-        let index = IpIndex::build(&[prefix("45.32.0.0/16")]);
-        assert!(index.lookup(address("2001:db8::1")).is_empty());
+        let entries = [prefix("45.32.0.0/16")];
+        let index = IpIndex::build(&entries);
+
+        assert!(index.matches(address("2001:db8::1")).is_empty());
     }
 
     #[test]
@@ -248,9 +289,13 @@ mod tests {
     fn the_expiry_of_an_observation_is_carried() {
         let mut entry = exact("45.32.1.1");
         entry.expires_at = Some(OffsetDateTime::UNIX_EPOCH);
-        let index = IpIndex::build(&[entry]);
-        let found = index.lookup(address("45.32.1.1"));
+        let entries = [entry];
+        let index = IpIndex::build(&entries);
+        let found = index.matches(address("45.32.1.1"));
 
-        assert_eq!(found[0].expires_at, Some(OffsetDateTime::UNIX_EPOCH));
+        assert_eq!(
+            entries[found[0]].expires_at,
+            Some(OffsetDateTime::UNIX_EPOCH)
+        );
     }
 }

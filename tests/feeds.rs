@@ -244,6 +244,70 @@ async fn a_refresh_inside_the_minimum_interval_is_skipped() {
 }
 
 #[tokio::test]
+async fn the_interval_applies_to_a_failed_refresh_as_well() {
+    let provider = ScriptedProvider::with_interval(
+        vec![Err(ProviderError::Status { code: 500 })],
+        Duration::from_secs(60 * 60),
+    );
+    let bots = BadBots::builder()
+        .feed_provider(provider.clone())
+        .clock(Arc::new(TestClock::new(now())))
+        .build()
+        .expect("the library is built");
+
+    let report = bots.refresh_feeds().await;
+    assert!(matches!(
+        report.results[0].result,
+        Err(ProviderError::Status { code: 500 })
+    ));
+    assert_eq!(provider.calls(), 1);
+
+    let report = bots.refresh_feeds().await;
+    assert_eq!(provider.calls(), 1);
+    assert!(matches!(
+        report.results[0].result,
+        Err(ProviderError::RateLimited { .. })
+    ));
+}
+
+#[tokio::test]
+async fn the_status_survives_an_interval_that_is_out_of_range() {
+    let provider =
+        ScriptedProvider::with_interval(vec![Ok(snapshot("a"))], Duration::from_secs(u64::MAX));
+    let bots = BadBots::builder()
+        .feed_provider(provider.clone())
+        .clock(Arc::new(TestClock::new(now())))
+        .build()
+        .expect("the library is built");
+
+    bots.refresh_feeds().await;
+
+    let status = status_of(&bots, ProviderId::new("scripted"));
+    assert_eq!(status.next_refresh_at, None);
+}
+
+#[tokio::test]
+async fn the_attribution_of_a_loaded_list_is_reachable() {
+    let provider = ScriptedProvider::new(vec![Ok(snapshot("a"))]);
+    let bots = BadBots::builder()
+        .feed_provider(provider.clone())
+        .clock(Arc::new(TestClock::new(now())))
+        .build()
+        .expect("the library is built");
+
+    bots.refresh_feeds().await;
+
+    assert_eq!(
+        bots.feed_attribution(&ProviderId::new("scripted")),
+        Some(String::new())
+    );
+    assert!(
+        bots.feed_header_lines(&ProviderId::new("scripted"))
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn a_replaced_list_is_never_seen_half_parsed() {
     let provider = ScriptedProvider::new(vec![Ok(snapshot("a")), Ok(snapshot("b"))]);
     let bots = BadBots::builder()

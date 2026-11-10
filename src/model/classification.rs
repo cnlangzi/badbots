@@ -40,7 +40,10 @@ pub enum VerdictReason {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CoverageLevel {
-    /// The provider evaluated this exact address.
+    /// The provider evaluated this address and returned a verdict.
+    ///
+    /// A provider that publishes a list evaluated the address against the
+    /// list, so an address the list names is evaluated as well.
     Definitive,
     /// The provider was consulted but its statement about this address is weak.
     Partial,

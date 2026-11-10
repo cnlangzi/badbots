@@ -279,7 +279,10 @@ pub const CROWDSEC_DEFAULT_MONTHLY_QUOTA: u32 = 120;
 pub const ABUSEIPDB_DEFAULT_MAX_AGE_DAYS: u32 = 30;
 /// The default daily budget of the Blocklist.de per-address query.
 pub const BLOCKLIST_DE_DEFAULT_DAILY_QUOTA: u32 = 10_000;
-/// The default daily budget of a list provider.
+/// The default daily budget of the list providers.
+///
+/// The budget of a list provider is separate from the budget of the
+/// per-address query of Blocklist.de.
 pub const FEED_DEFAULT_DAILY_QUOTA: u32 = 10_000;
 
 /// The shortest interval between two Spamhaus refreshes.

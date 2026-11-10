@@ -256,38 +256,82 @@ impl BadBots {
     /// refreshes a feed on its own. A provider whose shortest refresh interval
     /// has not elapsed is not asked again and is reported with the time that is
     /// left. A provider that fails keeps the snapshot it had.
+    ///
+    /// The interval of a provider applies to a failed refresh as well, so that
+    /// a publisher that is unreachable is not asked again and again.
     pub async fn refresh_feeds(&self) -> FeedRefreshReport {
         let now = self.inner.clock.now();
-        let mut results = Vec::new();
-        for provider in &self.inner.feed_providers {
+        let mut skipped: Vec<(usize, FeedRefreshResult)> = Vec::new();
+        let mut due: Vec<(usize, &Arc<dyn FeedProvider>)> = Vec::new();
+
+        for (position, provider) in self.inner.feed_providers.iter().enumerate() {
             if let Some(remaining) = self.refresh_remaining(provider.as_ref(), now) {
-                results.push(FeedRefreshResult {
-                    provider: provider.id(),
-                    result: Err(ProviderError::RateLimited {
-                        retry_after: Some(remaining),
-                    }),
-                });
+                skipped.push((
+                    position,
+                    FeedRefreshResult {
+                        provider: provider.id(),
+                        result: Err(ProviderError::RateLimited {
+                            retry_after: Some(remaining),
+                        }),
+                    },
+                ));
                 continue;
             }
+            due.push((position, provider));
+        }
 
-            self.record_attempt(provider.id(), now);
-            let result = provider.fetch().await;
+        let fetched = futures_util::future::join_all(
+            due.iter()
+                .map(|(_, provider)| async move { (provider.id(), provider.fetch().await) }),
+        )
+        .await;
+
+        let mut results = skipped;
+        for ((position, _), (id, result)) in due.into_iter().zip(fetched) {
+            self.record_attempt(id.clone(), now);
+            self.record_refresh(id.clone(), now);
 
             match &result {
                 Ok(snapshot) => {
-                    self.record_refresh(provider.id(), now);
-                    self.record_success(provider.id(), now);
-                    self.install(provider.id(), snapshot.clone());
+                    self.record_success(id.clone(), now);
+                    self.install(id.clone(), snapshot.clone());
                 }
-                Err(error) => self.record_failure(provider.id(), now, error.clone()),
+                Err(error) => self.record_failure(id.clone(), now, error.clone()),
             }
 
-            results.push(FeedRefreshResult {
-                provider: provider.id(),
-                result,
-            });
+            results.push((
+                position,
+                FeedRefreshResult {
+                    provider: id,
+                    result,
+                },
+            ));
         }
-        FeedRefreshReport { results }
+
+        results.sort_by_key(|(position, _)| *position);
+        FeedRefreshReport {
+            results: results.into_iter().map(|(_, result)| result).collect(),
+        }
+    }
+
+    /// The attribution of a loaded list.
+    ///
+    /// The upstream asks for its credit and its terms to be reproduced when the
+    /// derived data is displayed or redistributed.
+    pub fn feed_attribution(&self, provider: &ProviderId) -> Option<String> {
+        let feeds = self.loaded_feeds();
+        feeds
+            .get(provider)
+            .map(|feed| feed.snapshot.attribution.clone())
+    }
+
+    /// The header lines of a loaded list.
+    pub fn feed_header_lines(&self, provider: &ProviderId) -> Vec<String> {
+        let feeds = self.loaded_feeds();
+        feeds
+            .get(provider)
+            .map(|feed| feed.snapshot.header_lines.clone())
+            .unwrap_or_default()
     }
 
     /// The health of every configured provider.
@@ -339,7 +383,14 @@ impl BadBots {
         for (provider, family, enabled) in self.configured_feed_providers() {
             reported.push(provider.clone());
             let provider_health = health.get(&provider);
-            statuses.push(self.feed_status_of(provider, family, enabled, provider_health, now));
+            statuses.push(self.feed_status_of(
+                provider,
+                family,
+                ProviderCapability::Corroborating,
+                enabled,
+                provider_health,
+                now,
+            ));
         }
 
         for provider in &self.inner.feed_providers {
@@ -349,6 +400,7 @@ impl BadBots {
             statuses.push(self.feed_status_of(
                 provider.id(),
                 provider.family(),
+                provider.capability(),
                 true,
                 health.get(&provider.id()),
                 now,
@@ -417,6 +469,7 @@ impl BadBots {
         &self,
         provider: ProviderId,
         family: SourceFamily,
+        capability: ProviderCapability,
         enabled: bool,
         health: Option<&ProviderHealth>,
         now: OffsetDateTime,
@@ -429,7 +482,7 @@ impl BadBots {
         ProviderStatus {
             provider,
             family,
-            capability: ProviderCapability::Corroborating,
+            capability,
             enabled,
             last_success: health.and_then(|health| health.last_success),
             last_attempt: health.and_then(|health| health.last_attempt),
@@ -459,7 +512,7 @@ impl BadBots {
             .find(|feed| feed.id() == *provider)?
             .min_refresh_interval();
 
-        Some(last + time::Duration::seconds(seconds_of(interval)))
+        last.checked_add(time::Duration::seconds(seconds_of(interval)))
     }
 
     /// The feeds that are currently loaded.
@@ -475,8 +528,7 @@ impl BadBots {
     /// The index is built before the snapshot is installed, so a reader never
     /// sees a snapshot that is not indexed yet.
     fn install(&self, provider: ProviderId, snapshot: FeedSnapshot) {
-        let index = IpIndex::build(&snapshot.entries);
-        let feed = Arc::new(LoadedFeed { snapshot, index });
+        let feed = Arc::new(LoadedFeed::new(snapshot));
 
         let mut feeds = match self.inner.feeds.write() {
             Ok(feeds) => feeds,
@@ -534,7 +586,7 @@ impl BadBots {
             };
 
             let mut matched = false;
-            for observation in feed.index.lookup(input.ip) {
+            for observation in feed.lookup(input.ip) {
                 let mut observation = observation;
                 if provider.capability() == ProviderCapability::Corroborating
                     && observation.strength == EvidenceStrength::Convicting

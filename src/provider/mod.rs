@@ -11,6 +11,7 @@ use crate::error::ProviderError;
 use crate::model::{CoverageLevel, Evidence, IpVerdict, ProviderId, SourceFamily, Suppression};
 
 pub mod lookup;
+pub mod services;
 
 #[cfg(feature = "abuseipdb")]
 pub mod abuseipdb;

@@ -5,18 +5,46 @@
 //! reader never sees a half-parsed list.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use crate::index::IpIndex;
-use crate::model::ProviderId;
+use crate::model::{Evidence, ProviderId};
 use crate::provider::FeedSnapshot;
 
 /// One loaded feed.
 pub struct LoadedFeed {
     /// The snapshot the publisher published.
     pub snapshot: FeedSnapshot,
-    /// The index built from the snapshot.
-    pub index: IpIndex,
+    index: IpIndex,
+}
+
+impl LoadedFeed {
+    /// Creates a loaded feed and the index over its observations.
+    pub fn new(snapshot: FeedSnapshot) -> Self {
+        let index = IpIndex::build(&snapshot.entries);
+        Self { snapshot, index }
+    }
+
+    /// The observations that apply to an address.
+    pub fn lookup(&self, ip: IpAddr) -> Vec<Evidence> {
+        self.index
+            .matches(ip)
+            .into_iter()
+            .filter_map(|position| self.snapshot.entries.get(position))
+            .cloned()
+            .collect()
+    }
+
+    /// The number of observations the feed holds.
+    pub fn len(&self) -> usize {
+        self.snapshot.entries.len()
+    }
+
+    /// Whether the feed holds no observation.
+    pub fn is_empty(&self) -> bool {
+        self.snapshot.entries.is_empty()
+    }
 }
 
 impl std::fmt::Debug for LoadedFeed {
@@ -39,8 +67,8 @@ pub struct LoadedFeeds {
 
 impl LoadedFeeds {
     /// The feed of a provider.
-    pub fn get(&self, provider: &ProviderId) -> Option<&Arc<LoadedFeed>> {
-        self.feeds.get(provider)
+    pub fn get(&self, provider: &ProviderId) -> Option<&LoadedFeed> {
+        self.feeds.get(provider).map(|feed| feed.as_ref())
     }
 
     /// Installs a feed, replacing the previous one of the provider.
