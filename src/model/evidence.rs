@@ -17,6 +17,14 @@ impl ProviderId {
     pub const ABUSEIPDB: Self = Self(Cow::Borrowed("abuseipdb"));
     /// The CrowdSec CTI provider.
     pub const CROWDSEC: Self = Self(Cow::Borrowed("crowdsec"));
+    /// The Spamhaus DROP list provider.
+    pub const SPAMHAUS: Self = Self(Cow::Borrowed("spamhaus"));
+    /// The Blocklist.de per-address query provider.
+    pub const BLOCKLIST_DE: Self = Self(Cow::Borrowed("blocklist_de"));
+    /// The Blocklist.de service list provider.
+    pub const BLOCKLIST_DE_LISTS: Self = Self(Cow::Borrowed("blocklist_de_lists"));
+    /// The DShield list provider.
+    pub const DSHIELD: Self = Self(Cow::Borrowed("dshield"));
 
     /// Creates an identifier for a provider.
     pub fn new(id: impl Into<Cow<'static, str>>) -> Self {
@@ -52,6 +60,12 @@ impl SourceFamily {
     pub const ABUSEIPDB: Self = Self(Cow::Borrowed("abuseipdb"));
     /// The CrowdSec CTI lineage.
     pub const CROWDSEC: Self = Self(Cow::Borrowed("crowdsec"));
+    /// The Spamhaus DROP lineage.
+    pub const SPAMHAUS: Self = Self(Cow::Borrowed("spamhaus"));
+    /// The Blocklist.de lineage.
+    pub const BLOCKLIST_DE: Self = Self(Cow::Borrowed("blocklist_de"));
+    /// The DShield lineage.
+    pub const DSHIELD: Self = Self(Cow::Borrowed("dshield"));
 
     /// Creates a family identifier.
     pub fn new(family: impl Into<Cow<'static, str>>) -> Self {

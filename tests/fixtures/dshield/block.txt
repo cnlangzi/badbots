@@ -1,0 +1,12 @@
+# DShield.org Recommended Block List
+#    (c) 2025 DShield.org
+#    some rights reserved. Details http://creativecommons.org/licenses/by-nc-sa/2.5/
+#
+#    updated: 2025-01-01T03:00:00.000000
+#
+#    Columns (tab delimited):
+#    Start IP	End IP	Prefix	Targets	Network	Country	Contact
+66.132.186.0	66.132.186.255	24	350	-	-	-
+45.32.0.0	45.32.255.255	16	1200	Example Networks	US	None
+10.0.0.0	10.0.0.255	24	not-a-number	-	-	-
+10.0.1.0	10.0.1.255	24	12	-	-	-

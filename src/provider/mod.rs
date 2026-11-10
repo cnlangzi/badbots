@@ -11,11 +11,18 @@ use crate::error::ProviderError;
 use crate::model::{CoverageLevel, Evidence, IpVerdict, ProviderId, SourceFamily, Suppression};
 
 pub mod lookup;
+pub mod services;
 
 #[cfg(feature = "abuseipdb")]
 pub mod abuseipdb;
+#[cfg(feature = "blocklist_de")]
+pub mod blocklist_de;
 #[cfg(feature = "crowdsec")]
 pub mod crowdsec;
+#[cfg(feature = "dshield")]
+pub mod dshield;
+#[cfg(feature = "spamhaus")]
+pub mod spamhaus;
 
 /// What a provider is allowed to do with its observations.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -106,6 +113,10 @@ pub trait LookupProvider: Send + Sync {
 }
 
 /// A provider that publishes a list of addresses.
+///
+/// An observation about an exact address carries that address in its raw
+/// values under the key [`ADDRESS_KEY`](crate::index::ADDRESS_KEY), because the
+/// index resolves an address to its observations from the snapshot alone.
 #[async_trait]
 pub trait FeedProvider: Send + Sync {
     /// The identifier of the provider.
@@ -177,4 +188,10 @@ pub struct ProviderStatus {
     pub budget_used: Option<u32>,
     /// The budget of the current window.
     pub budget_limit: Option<u32>,
+    /// The number of entries of the loaded list.
+    pub entries: Option<u32>,
+    /// The publication time of the loaded list.
+    pub published_at: Option<OffsetDateTime>,
+    /// The earliest instant at which the list may be fetched again.
+    pub next_refresh_at: Option<OffsetDateTime>,
 }

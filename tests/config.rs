@@ -3,9 +3,10 @@
 use std::time::Duration;
 
 use badbots::{
-    AbuseIpdbConfig, ApiKey, BadBots, Classification, Config, ConfigError, Coverage, CoverageLevel,
-    Evidence, EvidenceStrength, MatchScope, NetworkScopePolicy, ProviderId, SourceFamily,
-    Suppression, ThreatCategory, VerdictInput, VerdictReason,
+    AbuseIpdbConfig, ApiKey, BadBots, BlocklistDeConfig, Classification, Config, ConfigError,
+    Coverage, CoverageLevel, DShieldConfig, Evidence, EvidenceStrength, MatchScope,
+    NetworkScopePolicy, ProviderId, SourceFamily, SpamhausConfig, Suppression, ThreatCategory,
+    VerdictInput, VerdictReason,
 };
 use time::OffsetDateTime;
 
@@ -33,11 +34,45 @@ fn a_configuration_survives_a_serde_round_trip() {
         base_url: Some("https://example.test/api/v2".to_string()),
         max_age_days: Some(30),
     });
+    config.providers.spamhaus = Some(SpamhausConfig {
+        enabled: true,
+        min_refresh_interval: Some(Duration::from_secs(3600)),
+        base_url: Some("https://example.test/drop".to_string()),
+    });
+    config.providers.blocklist_de = Some(BlocklistDeConfig {
+        enabled: true,
+        window: Some(Duration::from_secs(3600)),
+        min_refresh_interval: Some(Duration::from_secs(1800)),
+        use_per_address_query: false,
+        use_service_lists: true,
+        daily_quota: Some(100),
+        api_base_url: Some("https://example.test".to_string()),
+        lists_base_url: Some("https://lists.example.test".to_string()),
+    });
+    config.providers.dshield = Some(DShieldConfig {
+        enabled: true,
+        min_refresh_interval: Some(Duration::from_secs(3600)),
+        user_agent: Some("badbots/0.1.0".to_string()),
+        base_url: Some("https://feeds.example.test".to_string()),
+    });
 
     let encoded = serde_json::to_string(&config).expect("the configuration is encoded");
     let decoded: Config = serde_json::from_str(&encoded).expect("the configuration is decoded");
 
     assert_eq!(decoded, config);
+}
+
+#[test]
+fn the_list_providers_keep_their_documented_defaults() {
+    let decoded: Config =
+        serde_json::from_str("{\"providers\":{\"blocklist_de\":{\"enabled\":true}}}").unwrap();
+
+    let provider = decoded
+        .providers
+        .blocklist_de
+        .expect("the provider is configured");
+    assert!(provider.use_per_address_query);
+    assert!(provider.use_service_lists);
 }
 
 #[test]

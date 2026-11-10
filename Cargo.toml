@@ -12,9 +12,12 @@ categories = ["security"]
 
 [features]
 default = []
-full = ["abuseipdb", "crowdsec"]
+full = ["abuseipdb", "blocklist_de", "crowdsec", "dshield", "spamhaus"]
 abuseipdb = []
+blocklist_de = []
 crowdsec = []
+dshield = []
+spamhaus = []
 
 [dependencies]
 async-trait = "0.1"

@@ -83,6 +83,87 @@ pub struct CrowdSecConfig {
     pub behavior_intents: Option<BTreeMap<String, BehaviorIntent>>,
 }
 
+/// The Spamhaus DROP list provider.
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub struct SpamhausConfig {
+    /// Whether the provider is queried.
+    #[serde(default)]
+    pub enabled: bool,
+    /// The shortest interval between two refreshes.
+    #[serde(default)]
+    pub min_refresh_interval: Option<Duration>,
+    /// The base URL of the JSON lists.
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
+/// The Blocklist.de provider.
+///
+/// The upstream publishes a per-address query and a set of per-service lists.
+/// The two are independent products of the same publisher, so the query and the
+/// lists can be switched on separately.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct BlocklistDeConfig {
+    /// Whether the provider is queried.
+    #[serde(default)]
+    pub enabled: bool,
+    /// The interval the per-address query asks about.
+    #[serde(default)]
+    pub window: Option<Duration>,
+    /// The shortest interval between two refreshes of the service lists.
+    #[serde(default)]
+    pub min_refresh_interval: Option<Duration>,
+    /// Whether the per-address query is used.
+    #[serde(default = "default_true")]
+    pub use_per_address_query: bool,
+    /// Whether the per-service lists are used.
+    #[serde(default = "default_true")]
+    pub use_service_lists: bool,
+    /// The number of queries per day the local budget guard allows.
+    #[serde(default)]
+    pub daily_quota: Option<u32>,
+    /// The base URL of the per-address query.
+    #[serde(default)]
+    pub api_base_url: Option<String>,
+    /// The base URL of the per-service lists.
+    #[serde(default)]
+    pub lists_base_url: Option<String>,
+}
+
+impl Default for BlocklistDeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            window: None,
+            min_refresh_interval: None,
+            use_per_address_query: true,
+            use_service_lists: true,
+            daily_quota: None,
+            api_base_url: None,
+            lists_base_url: None,
+        }
+    }
+}
+
+/// The DShield list provider.
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub struct DShieldConfig {
+    /// Whether the provider is queried.
+    #[serde(default)]
+    pub enabled: bool,
+    /// The shortest interval between two refreshes.
+    #[serde(default)]
+    pub min_refresh_interval: Option<Duration>,
+    /// The user agent that identifies the operator.
+    ///
+    /// The publisher refuses requests that do not identify their sender.
+    #[serde(default)]
+    pub user_agent: Option<String>,
+    /// The base URL of the lists.
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
 /// The configuration of every supported provider.
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub struct ProviderConfig {
@@ -92,6 +173,15 @@ pub struct ProviderConfig {
     /// The CrowdSec CTI provider.
     #[serde(default)]
     pub crowdsec: Option<CrowdSecConfig>,
+    /// The Spamhaus DROP list provider.
+    #[serde(default)]
+    pub spamhaus: Option<SpamhausConfig>,
+    /// The Blocklist.de provider.
+    #[serde(default)]
+    pub blocklist_de: Option<BlocklistDeConfig>,
+    /// The DShield list provider.
+    #[serde(default)]
+    pub dshield: Option<DShieldConfig>,
 }
 
 /// The configuration of the library.
@@ -139,6 +229,10 @@ fn default_cache_capacity() -> usize {
     10_000
 }
 
+fn default_true() -> bool {
+    true
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -157,11 +251,25 @@ impl Default for Config {
 pub const ABUSEIPDB_FEATURE: &str = "abuseipdb";
 /// The identifier of the CrowdSec provider.
 pub const CROWDSEC_FEATURE: &str = "crowdsec";
+/// The identifier of the Spamhaus provider.
+pub const SPAMHAUS_FEATURE: &str = "spamhaus";
+/// The identifier of the Blocklist.de provider.
+pub const BLOCKLIST_DE_FEATURE: &str = "blocklist_de";
+/// The identifier of the DShield provider.
+pub const DSHIELD_FEATURE: &str = "dshield";
 
 /// The upstream endpoint of the AbuseIPDB check API.
 pub const ABUSEIPDB_DEFAULT_BASE_URL: &str = "https://api.abuseipdb.com/api/v2";
 /// The upstream endpoint of the CrowdSec CTI API.
 pub const CROWDSEC_DEFAULT_BASE_URL: &str = "https://cti.api.crowdsec.net/v2";
+/// The upstream endpoint of the Spamhaus DROP lists.
+pub const SPAMHAUS_DEFAULT_BASE_URL: &str = "https://www.spamhaus.org/drop";
+/// The upstream endpoint of the Blocklist.de per-address query.
+pub const BLOCKLIST_DE_DEFAULT_API_BASE_URL: &str = "https://api.blocklist.de";
+/// The upstream endpoint of the Blocklist.de service lists.
+pub const BLOCKLIST_DE_DEFAULT_LISTS_BASE_URL: &str = "https://lists.blocklist.de";
+/// The upstream endpoint of the DShield lists.
+pub const DSHIELD_DEFAULT_BASE_URL: &str = "https://feeds.dshield.org";
 
 /// The default daily budget of the AbuseIPDB provider.
 pub const ABUSEIPDB_DEFAULT_DAILY_QUOTA: u32 = 1_000;
@@ -169,6 +277,22 @@ pub const ABUSEIPDB_DEFAULT_DAILY_QUOTA: u32 = 1_000;
 pub const CROWDSEC_DEFAULT_MONTHLY_QUOTA: u32 = 120;
 /// The default number of days of reports requested from AbuseIPDB.
 pub const ABUSEIPDB_DEFAULT_MAX_AGE_DAYS: u32 = 30;
+/// The default daily budget of the Blocklist.de per-address query.
+pub const BLOCKLIST_DE_DEFAULT_DAILY_QUOTA: u32 = 10_000;
+/// The default daily budget of the list providers.
+///
+/// The budget of a list provider is separate from the budget of the
+/// per-address query of Blocklist.de.
+pub const FEED_DEFAULT_DAILY_QUOTA: u32 = 10_000;
+
+/// The shortest interval between two Spamhaus refreshes.
+pub const SPAMHAUS_DEFAULT_MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// The shortest interval between two Blocklist.de refreshes.
+pub const BLOCKLIST_DE_DEFAULT_MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
+/// The shortest interval between two DShield refreshes.
+pub const DSHIELD_DEFAULT_MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// The interval the Blocklist.de per-address query asks about.
+pub const BLOCKLIST_DE_DEFAULT_WINDOW: Duration = Duration::from_secs(48 * 60 * 60);
 
 impl ProviderConfig {
     /// Whether the AbuseIPDB provider is configured and enabled.
@@ -179,6 +303,21 @@ impl ProviderConfig {
     /// Whether the CrowdSec provider is configured and enabled.
     pub fn crowdsec_enabled(&self) -> bool {
         self.crowdsec.as_ref().is_some_and(|c| c.enabled)
+    }
+
+    /// Whether the Spamhaus provider is configured and enabled.
+    pub fn spamhaus_enabled(&self) -> bool {
+        self.spamhaus.as_ref().is_some_and(|c| c.enabled)
+    }
+
+    /// Whether the Blocklist.de provider is configured and enabled.
+    pub fn blocklist_de_enabled(&self) -> bool {
+        self.blocklist_de.as_ref().is_some_and(|c| c.enabled)
+    }
+
+    /// Whether the DShield provider is configured and enabled.
+    pub fn dshield_enabled(&self) -> bool {
+        self.dshield.as_ref().is_some_and(|c| c.enabled)
     }
 }
 

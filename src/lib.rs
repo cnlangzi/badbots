@@ -23,7 +23,9 @@ pub mod clock;
 pub mod config;
 pub mod engine;
 pub mod error;
+pub mod feed;
 pub mod http;
+pub mod index;
 pub mod model;
 pub mod provider;
 pub mod quota;
@@ -34,11 +36,19 @@ pub use cache::TtlCache;
 pub use clock::{Clock, FixedClock, SystemClock};
 pub use config::{
     ABUSEIPDB_DEFAULT_BASE_URL, ABUSEIPDB_DEFAULT_DAILY_QUOTA, ABUSEIPDB_DEFAULT_MAX_AGE_DAYS,
-    ABUSEIPDB_FEATURE, AbuseIpdbConfig, CROWDSEC_DEFAULT_BASE_URL, CROWDSEC_DEFAULT_MONTHLY_QUOTA,
-    CROWDSEC_FEATURE, Config, CrowdSecConfig, NetworkScopePolicy, ProviderConfig, UserAgentConfig,
+    ABUSEIPDB_FEATURE, AbuseIpdbConfig, BLOCKLIST_DE_DEFAULT_API_BASE_URL,
+    BLOCKLIST_DE_DEFAULT_DAILY_QUOTA, BLOCKLIST_DE_DEFAULT_LISTS_BASE_URL,
+    BLOCKLIST_DE_DEFAULT_MIN_REFRESH_INTERVAL, BLOCKLIST_DE_DEFAULT_WINDOW, BLOCKLIST_DE_FEATURE,
+    BlocklistDeConfig, CROWDSEC_DEFAULT_BASE_URL, CROWDSEC_DEFAULT_MONTHLY_QUOTA, CROWDSEC_FEATURE,
+    Config, CrowdSecConfig, DSHIELD_DEFAULT_BASE_URL, DSHIELD_DEFAULT_MIN_REFRESH_INTERVAL,
+    DSHIELD_FEATURE, DShieldConfig, FEED_DEFAULT_DAILY_QUOTA, NetworkScopePolicy, ProviderConfig,
+    SPAMHAUS_DEFAULT_BASE_URL, SPAMHAUS_DEFAULT_MIN_REFRESH_INTERVAL, SPAMHAUS_FEATURE,
+    SpamhausConfig, UserAgentConfig,
 };
 pub use engine::classify;
 pub use error::{ConfigError, Error, ProviderError};
+pub use feed::{LoadedFeed, LoadedFeeds};
+pub use index::IpIndex;
 pub use model::{
     Assertion, BehaviorIntent, BotKind, BotVerdict, Classification, Coverage, CoverageLevel,
     Evidence, EvidenceStrength, IpVerdict, MatchScope, ObservationWindow, ProviderId,
@@ -54,7 +64,7 @@ pub use secret::ApiKey;
 use std::collections::HashMap;
 use std::fmt;
 use std::net::IpAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use time::OffsetDateTime;
@@ -80,6 +90,7 @@ struct Inner {
     health: Mutex<HashMap<ProviderId, ProviderHealth>>,
     failures: Mutex<HashMap<CacheKey, (ProviderError, OffsetDateTime)>>,
     refreshes: Mutex<HashMap<ProviderId, OffsetDateTime>>,
+    feeds: RwLock<Arc<LoadedFeeds>>,
     markers: UserAgentMarkers,
     clock: Arc<dyn Clock>,
     concurrency: Semaphore,
@@ -111,7 +122,7 @@ impl BadBots {
     /// Classifies an address from local state only.
     ///
     /// The call performs no network I/O: it answers from the lookup results that
-    /// are already cached.
+    /// are already cached and from the feeds that are already loaded.
     pub fn assess_ip(&self, ip: IpAddr) -> IpVerdict {
         let now = self.inner.clock.now();
         let ip = normalize(ip);
@@ -131,6 +142,7 @@ impl BadBots {
             }
         }
 
+        self.merge_feeds(&mut input);
         self.merge_failures(&mut input, now);
         classify(&input, &self.inner.config, now)
     }
@@ -228,6 +240,8 @@ impl BadBots {
             }
         }
 
+        self.merge_feeds(&mut input);
+
         let verdict = classify(&input, &self.inner.config, now);
         EnrichmentReport {
             ip,
@@ -240,30 +254,84 @@ impl BadBots {
     ///
     /// The call is asynchronous and performs the network I/O. The library never
     /// refreshes a feed on its own. A provider whose shortest refresh interval
-    /// has not elapsed is not asked again.
+    /// has not elapsed is not asked again and is reported with the time that is
+    /// left. A provider that fails keeps the snapshot it had.
+    ///
+    /// The interval of a provider applies to a failed refresh as well, so that
+    /// a publisher that is unreachable is not asked again and again.
     pub async fn refresh_feeds(&self) -> FeedRefreshReport {
         let now = self.inner.clock.now();
-        let mut results = Vec::new();
-        for provider in &self.inner.feed_providers {
+        let mut skipped: Vec<(usize, FeedRefreshResult)> = Vec::new();
+        let mut due: Vec<(usize, &Arc<dyn FeedProvider>)> = Vec::new();
+
+        for (position, provider) in self.inner.feed_providers.iter().enumerate() {
             if let Some(remaining) = self.refresh_remaining(provider.as_ref(), now) {
-                results.push(FeedRefreshResult {
-                    provider: provider.id(),
-                    result: Err(ProviderError::RateLimited {
-                        retry_after: Some(remaining),
-                    }),
-                });
+                skipped.push((
+                    position,
+                    FeedRefreshResult {
+                        provider: provider.id(),
+                        result: Err(ProviderError::RateLimited {
+                            retry_after: Some(remaining),
+                        }),
+                    },
+                ));
                 continue;
             }
-            let result = provider.fetch().await;
-            if result.is_ok() {
-                self.record_refresh(provider.id(), now);
-            }
-            results.push(FeedRefreshResult {
-                provider: provider.id(),
-                result,
-            });
+            due.push((position, provider));
         }
-        FeedRefreshReport { results }
+
+        let fetched = futures_util::future::join_all(
+            due.iter()
+                .map(|(_, provider)| async move { (provider.id(), provider.fetch().await) }),
+        )
+        .await;
+
+        let mut results = skipped;
+        for ((position, _), (id, result)) in due.into_iter().zip(fetched) {
+            self.record_attempt(id.clone(), now);
+            self.record_refresh(id.clone(), now);
+
+            match &result {
+                Ok(snapshot) => {
+                    self.record_success(id.clone(), now);
+                    self.install(id.clone(), snapshot.clone());
+                }
+                Err(error) => self.record_failure(id.clone(), now, error.clone()),
+            }
+
+            results.push((
+                position,
+                FeedRefreshResult {
+                    provider: id,
+                    result,
+                },
+            ));
+        }
+
+        results.sort_by_key(|(position, _)| *position);
+        FeedRefreshReport {
+            results: results.into_iter().map(|(_, result)| result).collect(),
+        }
+    }
+
+    /// The attribution of a loaded list.
+    ///
+    /// The upstream asks for its credit and its terms to be reproduced when the
+    /// derived data is displayed or redistributed.
+    pub fn feed_attribution(&self, provider: &ProviderId) -> Option<String> {
+        let feeds = self.loaded_feeds();
+        feeds
+            .get(provider)
+            .map(|feed| feed.snapshot.attribution.clone())
+    }
+
+    /// The header lines of a loaded list.
+    pub fn feed_header_lines(&self, provider: &ProviderId) -> Vec<String> {
+        let feeds = self.loaded_feeds();
+        feeds
+            .get(provider)
+            .map(|feed| feed.snapshot.header_lines.clone())
+            .unwrap_or_default()
     }
 
     /// The health of every configured provider.
@@ -298,7 +366,77 @@ impl BadBots {
             ));
         }
 
+        if let Some(provider) = &self.inner.config.providers.blocklist_de
+            && provider.use_per_address_query
+        {
+            statuses.push(self.status_of(
+                ProviderId::BLOCKLIST_DE,
+                SourceFamily::BLOCKLIST_DE,
+                ProviderCapability::Corroborating,
+                provider.enabled,
+                health.get(&ProviderId::BLOCKLIST_DE),
+                now,
+            ));
+        }
+
+        let mut reported = Vec::new();
+        for (provider, family, enabled) in self.configured_feed_providers() {
+            reported.push(provider.clone());
+            let provider_health = health.get(&provider);
+            statuses.push(self.feed_status_of(
+                provider,
+                family,
+                ProviderCapability::Corroborating,
+                enabled,
+                provider_health,
+                now,
+            ));
+        }
+
+        for provider in &self.inner.feed_providers {
+            if reported.contains(&provider.id()) {
+                continue;
+            }
+            statuses.push(self.feed_status_of(
+                provider.id(),
+                provider.family(),
+                provider.capability(),
+                true,
+                health.get(&provider.id()),
+                now,
+            ));
+        }
+
         statuses
+    }
+
+    /// The list providers the configuration asks for.
+    fn configured_feed_providers(&self) -> Vec<(ProviderId, SourceFamily, bool)> {
+        let mut configured = Vec::new();
+
+        if let Some(provider) = &self.inner.config.providers.spamhaus {
+            configured.push((
+                ProviderId::SPAMHAUS,
+                SourceFamily::SPAMHAUS,
+                provider.enabled,
+            ));
+        }
+
+        if let Some(provider) = &self.inner.config.providers.dshield {
+            configured.push((ProviderId::DSHIELD, SourceFamily::DSHIELD, provider.enabled));
+        }
+
+        if let Some(provider) = &self.inner.config.providers.blocklist_de
+            && provider.use_service_lists
+        {
+            configured.push((
+                ProviderId::BLOCKLIST_DE_LISTS,
+                SourceFamily::BLOCKLIST_DE,
+                provider.enabled,
+            ));
+        }
+
+        configured
     }
 
     fn status_of(
@@ -321,7 +459,84 @@ impl BadBots {
             last_error: health.and_then(|health| health.last_error.clone()),
             budget_used: runtime.map(|runtime| runtime.quota().used(now)),
             budget_limit: runtime.map(|runtime| runtime.quota().limit()),
+            entries: None,
+            published_at: None,
+            next_refresh_at: None,
         }
+    }
+
+    fn feed_status_of(
+        &self,
+        provider: ProviderId,
+        family: SourceFamily,
+        capability: ProviderCapability,
+        enabled: bool,
+        health: Option<&ProviderHealth>,
+        now: OffsetDateTime,
+    ) -> ProviderStatus {
+        let runtime = self.inner.runtimes.get(&provider);
+        let feeds = self.loaded_feeds();
+        let feed = feeds.get(&provider);
+        let next_refresh_at = self.next_refresh_at(&provider);
+
+        ProviderStatus {
+            provider,
+            family,
+            capability,
+            enabled,
+            last_success: health.and_then(|health| health.last_success),
+            last_attempt: health.and_then(|health| health.last_attempt),
+            last_error: health.and_then(|health| health.last_error.clone()),
+            budget_used: runtime.map(|runtime| runtime.quota().used(now)),
+            budget_limit: runtime.map(|runtime| runtime.quota().limit()),
+            entries: feed
+                .map(|feed| u32::try_from(feed.snapshot.entries.len()).unwrap_or(u32::MAX)),
+            published_at: feed.and_then(|feed| feed.snapshot.published_at),
+            next_refresh_at,
+        }
+    }
+
+    /// The instant at which a provider may be asked again.
+    fn next_refresh_at(&self, provider: &ProviderId) -> Option<OffsetDateTime> {
+        let last = {
+            let refreshes = match self.inner.refreshes.lock() {
+                Ok(refreshes) => refreshes,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *refreshes.get(provider)?
+        };
+        let interval = self
+            .inner
+            .feed_providers
+            .iter()
+            .find(|feed| feed.id() == *provider)?
+            .min_refresh_interval();
+
+        last.checked_add(time::Duration::seconds(seconds_of(interval)))
+    }
+
+    /// The feeds that are currently loaded.
+    fn loaded_feeds(&self) -> Arc<LoadedFeeds> {
+        match self.inner.feeds.read() {
+            Ok(feeds) => Arc::clone(&feeds),
+            Err(poisoned) => Arc::clone(&poisoned.into_inner()),
+        }
+    }
+
+    /// Installs a snapshot and the index built from it.
+    ///
+    /// The index is built before the snapshot is installed, so a reader never
+    /// sees a snapshot that is not indexed yet.
+    fn install(&self, provider: ProviderId, snapshot: FeedSnapshot) {
+        let feed = Arc::new(LoadedFeed::new(snapshot));
+
+        let mut feeds = match self.inner.feeds.write() {
+            Ok(feeds) => feeds,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let mut registry = (**feeds).clone();
+        registry.install(provider, feed);
+        *feeds = Arc::new(registry);
     }
 
     fn merge(
@@ -352,6 +567,50 @@ impl BadBots {
         input
             .coverage
             .record_success(verdict.provider.clone(), verdict.coverage);
+    }
+
+    /// Adds the observations of the loaded feeds.
+    ///
+    /// A feed provider keeps the lineage of the observation it publishes, so a
+    /// list that republishes another publisher's data does not count as a
+    /// second vote.
+    fn merge_feeds(&self, input: &mut VerdictInput) {
+        let feeds = self.loaded_feeds();
+
+        for provider in &self.inner.feed_providers {
+            if provider.capability() == ProviderCapability::ContextOnly {
+                continue;
+            }
+            let Some(feed) = feeds.get(&provider.id()) else {
+                continue;
+            };
+
+            let mut matched = false;
+            for observation in feed.lookup(input.ip) {
+                let mut observation = observation;
+                if provider.capability() == ProviderCapability::Corroborating
+                    && observation.strength == EvidenceStrength::Convicting
+                {
+                    observation.strength = EvidenceStrength::Corroborating;
+                }
+                matched = true;
+                input.evidence.push(observation);
+            }
+
+            if input.coverage.definitive.contains(&provider.id())
+                || input.coverage.partial.contains(&provider.id())
+            {
+                continue;
+            }
+            input.coverage.record_success(
+                provider.id(),
+                if matched {
+                    CoverageLevel::Definitive
+                } else {
+                    CoverageLevel::Partial
+                },
+            );
+        }
     }
 
     /// Adds the failures that were recorded for the assessed address.
@@ -416,6 +675,8 @@ impl BadBots {
     }
 
     /// The time left before the provider may be asked again.
+    ///
+    /// A provider whose interval has elapsed may be asked again.
     fn refresh_remaining(
         &self,
         provider: &dyn FeedProvider,
@@ -429,7 +690,12 @@ impl BadBots {
             *refreshes.get(&provider.id())?
         };
         let elapsed = (now - last).unsigned_abs();
-        provider.min_refresh_interval().checked_sub(elapsed)
+        let remaining = provider.min_refresh_interval().checked_sub(elapsed)?;
+
+        if remaining.is_zero() {
+            return None;
+        }
+        Some(remaining)
     }
 
     fn record_attempt(&self, provider: ProviderId, now: OffsetDateTime) {
@@ -523,6 +789,39 @@ impl BadBotsBuilder {
         self
     }
 
+    /// Enables the Spamhaus DROP provider.
+    pub fn enable_spamhaus(mut self) -> Self {
+        let provider = self
+            .config
+            .providers
+            .spamhaus
+            .get_or_insert_with(SpamhausConfig::default);
+        provider.enabled = true;
+        self
+    }
+
+    /// Enables the Blocklist.de provider.
+    pub fn enable_blocklist_de(mut self) -> Self {
+        let provider = self
+            .config
+            .providers
+            .blocklist_de
+            .get_or_insert_with(BlocklistDeConfig::default);
+        provider.enabled = true;
+        self
+    }
+
+    /// Enables the DShield provider.
+    pub fn enable_dshield(mut self) -> Self {
+        let provider = self
+            .config
+            .providers
+            .dshield
+            .get_or_insert_with(DShieldConfig::default);
+        provider.enabled = true;
+        self
+    }
+
     /// Sets the timeout of a single provider request.
     pub fn request_timeout(mut self, timeout: Duration) -> Self {
         self.config.request_timeout = timeout;
@@ -598,6 +897,27 @@ impl BadBotsBuilder {
             });
         }
 
+        if config.providers.spamhaus_enabled() && !cfg!(feature = "spamhaus") {
+            return Err(ConfigError::MissingFeature {
+                provider: ProviderId::SPAMHAUS,
+                feature: SPAMHAUS_FEATURE,
+            });
+        }
+
+        if config.providers.blocklist_de_enabled() && !cfg!(feature = "blocklist_de") {
+            return Err(ConfigError::MissingFeature {
+                provider: ProviderId::BLOCKLIST_DE,
+                feature: BLOCKLIST_DE_FEATURE,
+            });
+        }
+
+        if config.providers.dshield_enabled() && !cfg!(feature = "dshield") {
+            return Err(ConfigError::MissingFeature {
+                provider: ProviderId::DSHIELD,
+                feature: DSHIELD_FEATURE,
+            });
+        }
+
         let client = match self.client {
             Some(client) => client,
             None => http::build_client(config.request_timeout)?,
@@ -612,6 +932,13 @@ impl BadBotsBuilder {
             providers.push(entry.provider);
         }
 
+        let mut feed_providers = registered_feed_providers(&config, &client, &clock, &mut runtimes);
+        for provider in self.feed_providers {
+            feed_providers.retain(|registered| registered.id() != provider.id());
+            runtimes.remove(&provider.id());
+            feed_providers.push(provider);
+        }
+
         let markers = self
             .markers
             .unwrap_or_else(|| config::markers_from_config(&config.user_agent));
@@ -622,11 +949,12 @@ impl BadBotsBuilder {
                 cache: TtlCache::new(config.cache_capacity),
                 config,
                 providers,
-                feed_providers: self.feed_providers,
+                feed_providers,
                 runtimes,
                 health: Mutex::new(HashMap::new()),
                 failures: Mutex::new(HashMap::new()),
                 refreshes: Mutex::new(HashMap::new()),
+                feeds: RwLock::new(Arc::new(LoadedFeeds::default())),
                 markers,
                 clock,
                 concurrency,
@@ -750,7 +1078,155 @@ fn registered_providers(
         }
     }
 
+    #[cfg(feature = "blocklist_de")]
+    {
+        if config.providers.blocklist_de_enabled() {
+            let provider_config = config
+                .providers
+                .blocklist_de
+                .as_ref()
+                .expect("the provider is enabled");
+
+            if provider_config.use_per_address_query {
+                let runtime = Arc::new(ProviderRuntime::new(
+                    client.clone(),
+                    provider::lookup::daily_guard(
+                        provider_config
+                            .daily_quota
+                            .unwrap_or(BLOCKLIST_DE_DEFAULT_DAILY_QUOTA),
+                    ),
+                    config.request_timeout,
+                    Arc::clone(clock),
+                ));
+                let provider = provider::blocklist_de::BlocklistDeQueryProvider::new(
+                    provider_config
+                        .api_base_url
+                        .clone()
+                        .unwrap_or_else(|| BLOCKLIST_DE_DEFAULT_API_BASE_URL.to_string()),
+                    provider_config
+                        .window
+                        .unwrap_or(BLOCKLIST_DE_DEFAULT_WINDOW),
+                    Arc::clone(&runtime),
+                );
+                registered.push(RegisteredProvider {
+                    provider: Arc::new(provider),
+                    runtime,
+                });
+            }
+        }
+    }
+
     Ok(registered)
+}
+
+/// The list providers the configuration asks for.
+#[cfg_attr(
+    not(any(feature = "spamhaus", feature = "blocklist_de", feature = "dshield")),
+    allow(unused_variables, unused_mut)
+)]
+fn registered_feed_providers(
+    config: &Config,
+    client: &reqwest::Client,
+    clock: &Arc<dyn Clock>,
+    runtimes: &mut HashMap<ProviderId, Arc<ProviderRuntime>>,
+) -> Vec<Arc<dyn FeedProvider>> {
+    let mut registered: Vec<Arc<dyn FeedProvider>> = Vec::new();
+
+    #[cfg(feature = "spamhaus")]
+    {
+        if config.providers.spamhaus_enabled() {
+            let provider_config = config
+                .providers
+                .spamhaus
+                .as_ref()
+                .expect("the provider is enabled");
+            let runtime = Arc::new(ProviderRuntime::new(
+                client.clone(),
+                provider::lookup::daily_guard(FEED_DEFAULT_DAILY_QUOTA),
+                config.request_timeout,
+                Arc::clone(clock),
+            ));
+            let provider = provider::spamhaus::SpamhausProvider::new(
+                provider_config
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| SPAMHAUS_DEFAULT_BASE_URL.to_string()),
+                provider_config
+                    .min_refresh_interval
+                    .unwrap_or(SPAMHAUS_DEFAULT_MIN_REFRESH_INTERVAL),
+                Arc::clone(&runtime),
+            );
+            runtimes.insert(ProviderId::SPAMHAUS, Arc::clone(&runtime));
+            registered.push(Arc::new(provider));
+        }
+    }
+
+    #[cfg(feature = "blocklist_de")]
+    {
+        if config.providers.blocklist_de_enabled() {
+            let provider_config = config
+                .providers
+                .blocklist_de
+                .as_ref()
+                .expect("the provider is enabled");
+
+            if provider_config.use_service_lists {
+                let runtime = Arc::new(ProviderRuntime::new(
+                    client.clone(),
+                    provider::lookup::daily_guard(FEED_DEFAULT_DAILY_QUOTA),
+                    config.request_timeout,
+                    Arc::clone(clock),
+                ));
+                let provider = provider::blocklist_de::BlocklistDeListProvider::new(
+                    provider_config
+                        .lists_base_url
+                        .clone()
+                        .unwrap_or_else(|| BLOCKLIST_DE_DEFAULT_LISTS_BASE_URL.to_string()),
+                    provider_config
+                        .min_refresh_interval
+                        .unwrap_or(BLOCKLIST_DE_DEFAULT_MIN_REFRESH_INTERVAL),
+                    Arc::clone(&runtime),
+                );
+                runtimes.insert(ProviderId::BLOCKLIST_DE_LISTS, Arc::clone(&runtime));
+                registered.push(Arc::new(provider));
+            }
+        }
+    }
+
+    #[cfg(feature = "dshield")]
+    {
+        if config.providers.dshield_enabled() {
+            let provider_config = config
+                .providers
+                .dshield
+                .as_ref()
+                .expect("the provider is enabled");
+            let runtime = Arc::new(ProviderRuntime::new(
+                client.clone(),
+                provider::lookup::daily_guard(FEED_DEFAULT_DAILY_QUOTA),
+                config.request_timeout,
+                Arc::clone(clock),
+            ));
+            let provider = provider::dshield::DShieldProvider::new(
+                provider_config
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| DSHIELD_DEFAULT_BASE_URL.to_string()),
+                provider_config
+                    .user_agent
+                    .clone()
+                    .unwrap_or_else(|| provider::dshield::DEFAULT_USER_AGENT.to_string()),
+                provider_config
+                    .min_refresh_interval
+                    .unwrap_or(DSHIELD_DEFAULT_MIN_REFRESH_INTERVAL),
+                Arc::clone(&runtime),
+            );
+            runtimes.insert(ProviderId::DSHIELD, Arc::clone(&runtime));
+            registered.push(Arc::new(provider));
+        }
+    }
+
+    registered
 }
 
 #[cfg_attr(
@@ -763,4 +1239,9 @@ fn api_key_from_env(name: &str) -> Option<ApiKey> {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .map(ApiKey::new)
+}
+
+/// The number of whole seconds of a duration.
+fn seconds_of(duration: Duration) -> i64 {
+    i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
 }

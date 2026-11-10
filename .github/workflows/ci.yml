@@ -26,3 +26,8 @@ jobs:
         run: cargo build --no-default-features
       - name: Test without the provider features
         run: cargo test --no-default-features
+      - name: Build every provider feature on its own
+        run: |
+          for feature in abuseipdb blocklist_de crowdsec dshield spamhaus; do
+            cargo build --no-default-features --features "$feature"
+          done

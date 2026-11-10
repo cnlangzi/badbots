@@ -84,6 +84,28 @@ impl ProviderRuntime {
         request: reqwest::RequestBuilder,
         now: OffsetDateTime,
     ) -> Result<reqwest::Response, ProviderError> {
+        self.dispatch(request, now, true).await
+    }
+
+    /// Sends a request that carries no credentials.
+    ///
+    /// A published list and the per-address query of Blocklist.de are read
+    /// without a key, so a refused request is reported with its status code
+    /// rather than as an authentication failure.
+    pub async fn send_anonymous(
+        &self,
+        request: reqwest::RequestBuilder,
+        now: OffsetDateTime,
+    ) -> Result<reqwest::Response, ProviderError> {
+        self.dispatch(request, now, false).await
+    }
+
+    async fn dispatch(
+        &self,
+        request: reqwest::RequestBuilder,
+        now: OffsetDateTime,
+        refused_is_unauthorized: bool,
+    ) -> Result<reqwest::Response, ProviderError> {
         if let Some(remaining) = self.cooldown.remaining() {
             return Err(ProviderError::RateLimited {
                 retry_after: Some(remaining),
@@ -104,7 +126,11 @@ impl ProviderRuntime {
             return Ok(response);
         }
 
-        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(ProviderError::Unauthorized);
+        }
+
+        if refused_is_unauthorized && status == reqwest::StatusCode::FORBIDDEN {
             return Err(ProviderError::Unauthorized);
         }
 
