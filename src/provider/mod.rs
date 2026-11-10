@@ -45,8 +45,6 @@ pub struct ProviderHealth {
 pub struct ProviderVerdict {
     /// The provider that answered.
     pub provider: ProviderId,
-    /// The upstream data lineage of the answer.
-    pub family: SourceFamily,
     /// How strongly the provider stated its answer.
     pub coverage: CoverageLevel,
     /// The observations the provider produced.
@@ -59,10 +57,9 @@ pub struct ProviderVerdict {
 
 impl ProviderVerdict {
     /// Creates a verdict without evidence and without suppression.
-    pub fn empty(provider: ProviderId, family: SourceFamily, coverage: CoverageLevel) -> Self {
+    pub fn empty(provider: ProviderId, coverage: CoverageLevel) -> Self {
         Self {
             provider,
-            family,
             coverage,
             evidence: Vec::new(),
             suppression: None,
@@ -98,6 +95,9 @@ pub trait LookupProvider: Send + Sync {
     /// The identifier of the provider.
     fn id(&self) -> ProviderId;
     /// The upstream data lineage of the provider.
+    ///
+    /// The lineage decides which observations corroborate each other, so the
+    /// engine takes it from here rather than from the observations themselves.
     fn family(&self) -> SourceFamily;
     /// What the provider is allowed to do with its observations.
     fn capability(&self) -> ProviderCapability;

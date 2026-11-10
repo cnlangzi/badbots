@@ -112,7 +112,7 @@ pub struct Config {
     /// How prefix-scoped observations may carry the verdict.
     #[serde(default)]
     pub network_scope_policy: NetworkScopePolicy,
-    /// The number of lookups that may run at the same time.
+    /// The number of upstream lookups that may run at the same time.
     #[serde(default = "default_max_concurrent_enrichments")]
     pub max_concurrent_enrichments: usize,
     /// The number of cached lookup results.

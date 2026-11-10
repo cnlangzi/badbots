@@ -14,7 +14,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use crate::model::ProviderId;
 
 /// The key of a cached lookup.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct CacheKey {
     /// The provider that produced the result.
     pub provider: ProviderId,
@@ -31,12 +31,16 @@ pub struct Cached<T> {
     pub expires_at: OffsetDateTime,
 }
 
-type Slot<T> = Arc<AsyncMutex<Option<Cached<T>>>>;
+/// One cache entry and the lock that guards it.
+#[derive(Debug)]
+struct Slot<T> {
+    entry: AsyncMutex<Option<Cached<T>>>,
+}
 
 /// A cache of lookup results with a bounded capacity.
 #[derive(Debug)]
 pub struct TtlCache<T> {
-    slots: Mutex<HashMap<CacheKey, Slot<T>>>,
+    slots: Mutex<HashMap<CacheKey, Arc<Slot<T>>>>,
     capacity: usize,
 }
 
@@ -68,7 +72,7 @@ impl<T: Clone> TtlCache<T> {
             };
             slots.get(key).cloned()
         }?;
-        let guard = slot.try_lock().ok()?;
+        let guard = slot.entry.try_lock().ok()?;
         let entry = guard.as_ref()?;
         if entry.expires_at > now {
             Some(entry.value.clone())
@@ -93,7 +97,7 @@ impl<T: Clone> TtlCache<T> {
         Fut: Future<Output = Result<Cached<T>, crate::error::ProviderError>>,
     {
         let slot = self.slot(&key);
-        let mut guard = slot.lock().await;
+        let mut guard = slot.entry.lock().await;
 
         if let Some(entry) = guard.as_ref()
             && entry.expires_at > now
@@ -101,27 +105,43 @@ impl<T: Clone> TtlCache<T> {
             return Ok(entry.value.clone());
         }
 
-        let fetched = fetch().await?;
+        let fetched = match fetch().await {
+            Ok(fetched) => fetched,
+            Err(error) => {
+                drop(guard);
+                self.enforce_capacity(now, Some(&key));
+                return Err(error);
+            }
+        };
         *guard = Some(fetched.clone());
         drop(guard);
 
-        self.enforce_capacity(now);
+        self.enforce_capacity(now, Some(&key));
 
         Ok(fetched.value)
     }
 
-    fn slot(&self, key: &CacheKey) -> Slot<T> {
+    fn slot(&self, key: &CacheKey) -> Arc<Slot<T>> {
         let mut slots = match self.slots.lock() {
             Ok(slots) => slots,
             Err(poisoned) => poisoned.into_inner(),
         };
         slots
             .entry(key.clone())
-            .or_insert_with(|| Arc::new(AsyncMutex::new(None)))
+            .or_insert_with(|| {
+                Arc::new(Slot {
+                    entry: AsyncMutex::new(None),
+                })
+            })
             .clone()
     }
 
-    fn enforce_capacity(&self, now: OffsetDateTime) {
+    /// Drops the entries that no longer carry a usable value until the cache
+    /// fits its capacity again.
+    ///
+    /// A slot that holds no value at all is dropped before a slot that holds a
+    /// value, so a failed lookup cannot leave the cache above its capacity.
+    fn enforce_capacity(&self, now: OffsetDateTime, keep: Option<&CacheKey>) {
         let mut slots = match self.slots.lock() {
             Ok(slots) => slots,
             Err(poisoned) => poisoned.into_inner(),
@@ -130,24 +150,33 @@ impl<T: Clone> TtlCache<T> {
             return;
         }
 
-        slots.retain(|_, slot| {
-            slot.try_lock()
+        slots.retain(|key, slot| {
+            if keep.is_some_and(|keep| keep == key) {
+                return true;
+            }
+            slot.entry
+                .try_lock()
                 .ok()
                 .and_then(|guard| guard.as_ref().map(|entry| entry.expires_at > now))
                 .unwrap_or(true)
         });
 
         while slots.len() > self.capacity {
-            let oldest = slots
+            let victim = slots
                 .iter()
+                .filter(|(key, _)| keep.is_none_or(|keep| keep != *key))
                 .filter_map(|(key, slot)| {
-                    slot.try_lock().ok().and_then(|guard| {
-                        guard.as_ref().map(|entry| (entry.expires_at, key.clone()))
+                    slot.entry.try_lock().ok().map(|guard| {
+                        let rank = match guard.as_ref() {
+                            Some(entry) => (1u8, entry.expires_at),
+                            None => (0u8, OffsetDateTime::UNIX_EPOCH),
+                        };
+                        (rank, key.clone())
                     })
                 })
-                .min_by_key(|(expires_at, _)| *expires_at)
+                .min_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)))
                 .map(|(_, key)| key);
-            match oldest {
+            match victim {
                 Some(key) => {
                     slots.remove(&key);
                 }
@@ -173,6 +202,27 @@ mod tests {
             provider: ProviderId::ABUSEIPDB,
             ip: ip.parse::<IpAddr>().unwrap(),
         }
+    }
+
+    #[tokio::test]
+    async fn a_failed_lookup_does_not_grow_the_cache() {
+        let cache: TtlCache<u32> = TtlCache::new(2);
+        let now = OffsetDateTime::UNIX_EPOCH;
+        for index in 0..10u8 {
+            let key = CacheKey {
+                provider: ProviderId::ABUSEIPDB,
+                ip: IpAddr::from([45, 32, 1, index]),
+            };
+            let result = cache
+                .get_or_fetch(key, now, || async {
+                    Err::<Cached<u32>, crate::error::ProviderError>(
+                        crate::error::ProviderError::Timeout,
+                    )
+                })
+                .await;
+            assert!(result.is_err());
+        }
+        assert!(cache.len() <= 2, "the cache grew to {}", cache.len());
     }
 
     #[tokio::test]

@@ -78,6 +78,8 @@ struct Inner {
     runtimes: HashMap<ProviderId, Arc<ProviderRuntime>>,
     cache: TtlCache<ProviderVerdict>,
     health: Mutex<HashMap<ProviderId, ProviderHealth>>,
+    failures: Mutex<HashMap<CacheKey, (ProviderError, OffsetDateTime)>>,
+    refreshes: Mutex<HashMap<ProviderId, OffsetDateTime>>,
     markers: UserAgentMarkers,
     clock: Arc<dyn Clock>,
     concurrency: Semaphore,
@@ -129,7 +131,7 @@ impl BadBots {
             }
         }
 
-        self.merge_failures(&mut input);
+        self.merge_failures(&mut input, now);
         classify(&input, &self.inner.config, now)
     }
 
@@ -148,7 +150,9 @@ impl BadBots {
     /// Looks the address up at every configured provider.
     ///
     /// The call is asynchronous and performs the network I/O. A result that is
-    /// already cached is reused and costs no upstream request.
+    /// already cached is reused and costs no upstream request. The providers are
+    /// consulted at the same time, so the call takes as long as the slowest
+    /// provider rather than the sum of all of them.
     pub async fn enrich_ip(&self, ip: IpAddr) -> EnrichmentReport {
         let now = self.inner.clock.now();
         let ip = normalize(ip);
@@ -163,32 +167,37 @@ impl BadBots {
             };
         }
 
-        let _permit = self.inner.concurrency.acquire().await.ok();
-
-        for provider in &self.inner.providers {
+        let lookups = self.inner.providers.iter().map(|provider| {
             let key = CacheKey {
                 provider: provider.id(),
                 ip,
             };
             let negative_ttl = self.inner.config.negative_ttl;
-            let result = self
-                .inner
-                .cache
-                .get_or_fetch(key, now, || async {
-                    let verdict = provider.lookup(ip).await?;
-                    let expires_at = verdict.expires_at.unwrap_or(now + negative_ttl);
-                    Ok(Cached {
-                        value: verdict,
-                        expires_at,
+            async move {
+                let _permit = self.inner.concurrency.acquire().await.ok();
+                let result = self
+                    .inner
+                    .cache
+                    .get_or_fetch(key.clone(), now, || async {
+                        let verdict = provider.lookup(ip).await?;
+                        let expires_at = verdict.expires_at.unwrap_or(now + negative_ttl);
+                        Ok(Cached {
+                            value: verdict,
+                            expires_at,
+                        })
                     })
-                })
-                .await;
+                    .await;
+                (provider, key, result)
+            }
+        });
 
+        for (provider, key, result) in futures_util::future::join_all(lookups).await {
             self.record_attempt(provider.id(), now);
 
             match result {
                 Ok(verdict) => {
                     self.record_success(provider.id(), now);
+                    self.clear_failure(&key);
                     tracing::debug!(
                         provider = %provider.id(),
                         ip = %ip,
@@ -203,6 +212,7 @@ impl BadBots {
                 }
                 Err(error) => {
                     self.record_failure(provider.id(), now, error.clone());
+                    self.record_address_failure(&key, error.clone(), now);
                     tracing::warn!(
                         provider = %provider.id(),
                         ip = %ip,
@@ -229,11 +239,25 @@ impl BadBots {
     /// Refreshes every configured feed.
     ///
     /// The call is asynchronous and performs the network I/O. The library never
-    /// refreshes a feed on its own.
+    /// refreshes a feed on its own. A provider whose shortest refresh interval
+    /// has not elapsed is not asked again.
     pub async fn refresh_feeds(&self) -> FeedRefreshReport {
+        let now = self.inner.clock.now();
         let mut results = Vec::new();
         for provider in &self.inner.feed_providers {
+            if let Some(remaining) = self.refresh_remaining(provider.as_ref(), now) {
+                results.push(FeedRefreshResult {
+                    provider: provider.id(),
+                    result: Err(ProviderError::RateLimited {
+                        retry_after: Some(remaining),
+                    }),
+                });
+                continue;
+            }
             let result = provider.fetch().await;
+            if result.is_ok() {
+                self.record_refresh(provider.id(), now);
+            }
             results.push(FeedRefreshResult {
                 provider: provider.id(),
                 result,
@@ -317,6 +341,7 @@ impl BadBots {
                 }
                 ProviderCapability::ContextOnly => continue,
             }
+            evidence.family = provider.family();
             input.evidence.push(evidence);
         }
         if let Some(suppression) = verdict.suppression {
@@ -329,29 +354,82 @@ impl BadBots {
             .record_success(verdict.provider.clone(), verdict.coverage);
     }
 
-    fn merge_failures(&self, input: &mut VerdictInput) {
-        let health = match self.inner.health.lock() {
-            Ok(health) => health,
+    /// Adds the failures that were recorded for the assessed address.
+    ///
+    /// A failure belongs to the address it happened for, so the record is kept
+    /// per address rather than per provider.
+    fn merge_failures(&self, input: &mut VerdictInput, now: OffsetDateTime) {
+        let ttl = self.failure_ttl();
+        let mut failures = match self.inner.failures.lock() {
+            Ok(failures) => failures,
             Err(poisoned) => poisoned.into_inner(),
         };
+        failures.retain(|_, (_, at)| now - *at <= ttl);
+
         for provider in &self.inner.providers {
-            let Some(health) = health.get(&provider.id()) else {
+            let key = CacheKey {
+                provider: provider.id(),
+                ip: input.ip,
+            };
+            let Some((error, _)) = failures.get(&key) else {
                 continue;
             };
-            let Some(error) = &health.last_error else {
-                continue;
-            };
-            let cached = self.inner.cache.get(
-                &CacheKey {
-                    provider: provider.id(),
-                    ip: input.ip,
-                },
-                self.inner.clock.now(),
-            );
-            if cached.is_none() {
-                input.coverage.record_failure(provider.id(), error.clone());
-            }
+            input.coverage.record_failure(provider.id(), error.clone());
         }
+    }
+
+    /// The time a failure stays attached to the address it happened for.
+    fn failure_ttl(&self) -> time::Duration {
+        let seconds = self
+            .inner
+            .config
+            .negative_ttl
+            .as_secs()
+            .min(i64::MAX as u64);
+        time::Duration::seconds(seconds as i64)
+    }
+
+    fn record_address_failure(&self, key: &CacheKey, error: ProviderError, now: OffsetDateTime) {
+        let ttl = self.failure_ttl();
+        let mut failures = match self.inner.failures.lock() {
+            Ok(failures) => failures,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        failures.retain(|_, (_, at)| now - *at <= ttl);
+        failures.insert(key.clone(), (error, now));
+    }
+
+    fn clear_failure(&self, key: &CacheKey) {
+        let mut failures = match self.inner.failures.lock() {
+            Ok(failures) => failures,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        failures.remove(key);
+    }
+
+    fn record_refresh(&self, provider: ProviderId, now: OffsetDateTime) {
+        let mut refreshes = match self.inner.refreshes.lock() {
+            Ok(refreshes) => refreshes,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        refreshes.insert(provider, now);
+    }
+
+    /// The time left before the provider may be asked again.
+    fn refresh_remaining(
+        &self,
+        provider: &dyn FeedProvider,
+        now: OffsetDateTime,
+    ) -> Option<Duration> {
+        let last = {
+            let refreshes = match self.inner.refreshes.lock() {
+                Ok(refreshes) => refreshes,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *refreshes.get(&provider.id())?
+        };
+        let elapsed = (now - last).unsigned_abs();
+        provider.min_refresh_interval().checked_sub(elapsed)
     }
 
     fn record_attempt(&self, provider: ProviderId, now: OffsetDateTime) {
@@ -391,6 +469,7 @@ pub struct BadBotsBuilder {
     client: Option<reqwest::Client>,
     clock: Option<Arc<dyn Clock>>,
     markers: Option<UserAgentMarkers>,
+    feed_providers: Vec<Arc<dyn FeedProvider>>,
 }
 
 impl BadBotsBuilder {
@@ -492,6 +571,12 @@ impl BadBotsBuilder {
         self
     }
 
+    /// Adds a provider that publishes a list of addresses.
+    pub fn feed_provider(mut self, provider: Arc<dyn FeedProvider>) -> Self {
+        self.feed_providers.push(provider);
+        self
+    }
+
     /// Builds the library instance.
     ///
     /// A provider that is enabled in the configuration but whose crate feature
@@ -518,7 +603,8 @@ impl BadBotsBuilder {
             None => http::build_client(config.request_timeout)?,
         };
 
-        let registered = registered_providers(&config, &client)?;
+        let clock = self.clock.unwrap_or_else(clock::system_clock);
+        let registered = registered_providers(&config, &client, &clock)?;
         let mut providers: Vec<Arc<dyn LookupProvider>> = Vec::with_capacity(registered.len());
         let mut runtimes: HashMap<ProviderId, Arc<ProviderRuntime>> = HashMap::new();
         for entry in registered {
@@ -529,7 +615,6 @@ impl BadBotsBuilder {
         let markers = self
             .markers
             .unwrap_or_else(|| config::markers_from_config(&config.user_agent));
-        let clock = self.clock.unwrap_or_else(clock::system_clock);
         let concurrency = Semaphore::new(config.max_concurrent_enrichments.max(1));
 
         Ok(BadBots {
@@ -537,9 +622,11 @@ impl BadBotsBuilder {
                 cache: TtlCache::new(config.cache_capacity),
                 config,
                 providers,
-                feed_providers: Vec::new(),
+                feed_providers: self.feed_providers,
                 runtimes,
                 health: Mutex::new(HashMap::new()),
+                failures: Mutex::new(HashMap::new()),
+                refreshes: Mutex::new(HashMap::new()),
                 markers,
                 clock,
                 concurrency,
@@ -561,6 +648,7 @@ struct RegisteredProvider {
 fn registered_providers(
     config: &Config,
     client: &reqwest::Client,
+    clock: &Arc<dyn Clock>,
 ) -> Result<Vec<RegisteredProvider>, ConfigError> {
     #[cfg_attr(
         not(any(feature = "abuseipdb", feature = "crowdsec")),
@@ -596,6 +684,7 @@ fn registered_providers(
                         .unwrap_or(ABUSEIPDB_DEFAULT_DAILY_QUOTA),
                 ),
                 config.request_timeout,
+                Arc::clone(clock),
             ));
             let provider = provider::abuseipdb::AbuseIpdbProvider::new(
                 key,
@@ -643,6 +732,7 @@ fn registered_providers(
                         .unwrap_or(CROWDSEC_DEFAULT_MONTHLY_QUOTA),
                 ),
                 config.request_timeout,
+                Arc::clone(clock),
             ));
             let provider = provider::crowdsec::CrowdSecProvider::new(
                 key,

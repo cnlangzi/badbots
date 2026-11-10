@@ -38,6 +38,7 @@ async fn provider_for(name: &str) -> (MockServer, AbuseIpdbProvider) {
         client,
         daily_guard(1_000),
         Duration::from_secs(5),
+        badbots::clock::system_clock(),
     ));
     let provider = AbuseIpdbProvider::new(
         ApiKey::new("test-key"),
@@ -55,7 +56,7 @@ async fn a_strong_recent_report_convicts() {
     let verdict = provider.lookup(ip()).await.expect("the lookup succeeds");
 
     assert_eq!(verdict.provider, ProviderId::ABUSEIPDB);
-    assert_eq!(verdict.family, SourceFamily::ABUSEIPDB);
+    assert_eq!(provider.family(), SourceFamily::ABUSEIPDB);
     assert_eq!(provider.capability(), ProviderCapability::Primary);
     assert_eq!(verdict.evidence.len(), 1);
 
@@ -184,6 +185,7 @@ async fn an_unauthorized_answer_is_reported() {
         client,
         daily_guard(1_000),
         Duration::from_secs(5),
+        badbots::clock::system_clock(),
     ));
     let provider = AbuseIpdbProvider::new(
         ApiKey::new("test-key"),

@@ -255,6 +255,53 @@ async fn a_negative_result_is_reused_until_the_negative_ttl_elapses() {
 }
 
 #[tokio::test]
+async fn the_injected_clock_reaches_the_provider() {
+    let server = serve("web_app_attack.json").await;
+    let clock = TestClock::new(OffsetDateTime::now_utc());
+    let bots = BadBots::builder()
+        .config(config(&format!("{}/api/v2", server.uri())))
+        .clock(Arc::new(clock.clone()))
+        .build()
+        .expect("the library is built");
+
+    bots.enrich_ip(ip()).await;
+
+    let statuses = bots.provider_status();
+    assert_eq!(statuses[0].budget_used, Some(1));
+    assert_eq!(
+        statuses[0].last_attempt,
+        Some(clock.instant()),
+        "the attempt is recorded against the injected clock"
+    );
+}
+
+#[tokio::test]
+async fn a_failure_belongs_to_the_address_it_happened_for() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v2/check"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let bots = BadBots::builder()
+        .config(config(&format!("{}/api/v2", server.uri())))
+        .build()
+        .expect("the library is built");
+
+    bots.enrich_ip(ip()).await;
+
+    let failed = bots.assess_ip(ip());
+    assert_eq!(failed.coverage.failed.len(), 1);
+
+    let other = bots.assess_ip(other_ip());
+    assert!(
+        other.coverage.failed.is_empty(),
+        "a failure of one address is reported for another address"
+    );
+}
+
+#[tokio::test]
 async fn the_provider_health_is_reported() {
     let server = serve("web_app_attack.json").await;
     let bots = BadBots::builder()

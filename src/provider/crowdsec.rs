@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -18,7 +18,7 @@ use crate::model::{
     Assertion, BehaviorIntent, CoverageLevel, Evidence, MatchScope, ObservationWindow, ProviderId,
     SourceFamily, Suppression, ThreatCategory,
 };
-use crate::provider::lookup::{ProviderRuntime, parse_body, read_body};
+use crate::provider::lookup::{ProviderRuntime, parse_body};
 use crate::provider::{LookupProvider, ProviderCapability, ProviderVerdict};
 use crate::secret::ApiKey;
 
@@ -26,29 +26,32 @@ use crate::secret::ApiKey;
 pub const VALIDITY_DAYS: i64 = 90;
 
 /// The compiled-in behavior intent table.
-pub fn default_intents() -> BTreeMap<String, BehaviorIntent> {
-    [
-        ("exploit", BehaviorIntent::Malicious),
-        ("bruteforce", BehaviorIntent::Malicious),
-        ("brute_force", BehaviorIntent::Malicious),
-        ("flood", BehaviorIntent::Malicious),
-        ("dos", BehaviorIntent::Malicious),
-        ("proxy", BehaviorIntent::Malicious),
-        ("sqli", BehaviorIntent::Malicious),
-        ("sql_injection", BehaviorIntent::Malicious),
-        ("idor", BehaviorIntent::Malicious),
-        ("rce", BehaviorIntent::Malicious),
-        ("spoof", BehaviorIntent::Malicious),
-        ("lateral", BehaviorIntent::Malicious),
-        ("scan", BehaviorIntent::Reconnaissance),
-        ("spam", BehaviorIntent::Abusive),
-        ("crawl", BehaviorIntent::Scraping),
-        ("scraping", BehaviorIntent::Scraping),
-        ("anomaly", BehaviorIntent::Anomalous),
-    ]
-    .into_iter()
-    .map(|(name, intent)| (name.to_string(), intent))
-    .collect()
+pub fn default_intents() -> &'static BTreeMap<String, BehaviorIntent> {
+    static TABLE: OnceLock<BTreeMap<String, BehaviorIntent>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        [
+            ("exploit", BehaviorIntent::Malicious),
+            ("bruteforce", BehaviorIntent::Malicious),
+            ("brute_force", BehaviorIntent::Malicious),
+            ("flood", BehaviorIntent::Malicious),
+            ("dos", BehaviorIntent::Malicious),
+            ("proxy", BehaviorIntent::Malicious),
+            ("sqli", BehaviorIntent::Malicious),
+            ("sql_injection", BehaviorIntent::Malicious),
+            ("idor", BehaviorIntent::Malicious),
+            ("rce", BehaviorIntent::Malicious),
+            ("spoof", BehaviorIntent::Malicious),
+            ("lateral", BehaviorIntent::Malicious),
+            ("scan", BehaviorIntent::Reconnaissance),
+            ("spam", BehaviorIntent::Abusive),
+            ("crawl", BehaviorIntent::Scraping),
+            ("scraping", BehaviorIntent::Scraping),
+            ("anomaly", BehaviorIntent::Anomalous),
+        ]
+        .into_iter()
+        .map(|(name, intent)| (name.to_string(), intent))
+        .collect()
+    })
 }
 
 /// The intent of a reported behavior.
@@ -132,7 +135,7 @@ impl LookupProvider for CrowdSecProvider {
     }
 
     async fn lookup(&self, ip: IpAddr) -> Result<ProviderVerdict, ProviderError> {
-        let now = OffsetDateTime::now_utc();
+        let now = self.runtime.clock().now();
         let url = format!("{}/smoke/{ip}", self.base_url.trim_end_matches('/'));
         let request = self
             .runtime
@@ -142,7 +145,7 @@ impl LookupProvider for CrowdSecProvider {
             .header("Accept", "application/json");
 
         let response = self.runtime.send(request, now).await?;
-        let body = read_body(response).await?;
+        let body = self.runtime.read_body(response).await?;
         let parsed: SmokeResponse = parse_body(&body)?;
 
         let reputation = parsed.reputation.unwrap_or_else(|| "unknown".to_string());
@@ -248,7 +251,6 @@ impl LookupProvider for CrowdSecProvider {
         let Some(strength) = strength else {
             return Ok(ProviderVerdict {
                 provider: ProviderId::CROWDSEC,
-                family: SourceFamily::CROWDSEC,
                 coverage: CoverageLevel::Definitive,
                 evidence: Vec::new(),
                 suppression,
@@ -259,7 +261,6 @@ impl LookupProvider for CrowdSecProvider {
         if suppressive_reputation {
             return Ok(ProviderVerdict {
                 provider: ProviderId::CROWDSEC,
-                family: SourceFamily::CROWDSEC,
                 coverage: CoverageLevel::Definitive,
                 evidence: Vec::new(),
                 suppression,
@@ -322,7 +323,6 @@ impl LookupProvider for CrowdSecProvider {
 
         Ok(ProviderVerdict {
             provider: ProviderId::CROWDSEC,
-            family: SourceFamily::CROWDSEC,
             coverage: CoverageLevel::Definitive,
             evidence: vec![evidence],
             suppression,
@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn an_override_wins_over_the_compiled_in_table() {
-        let mut intents = default_intents();
+        let mut intents = default_intents().clone();
         intents.insert("http:scan".to_string(), BehaviorIntent::Malicious);
         assert_eq!(
             intent_of("http:scan", &intents),

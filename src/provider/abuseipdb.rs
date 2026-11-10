@@ -17,7 +17,7 @@ use crate::error::ProviderError;
 use crate::model::{
     Assertion, CoverageLevel, Evidence, MatchScope, ProviderId, SourceFamily, ThreatCategory,
 };
-use crate::provider::lookup::{ProviderRuntime, parse_body, read_body};
+use crate::provider::lookup::{ProviderRuntime, parse_body};
 use crate::provider::{LookupProvider, ProviderCapability, ProviderVerdict};
 use crate::secret::ApiKey;
 
@@ -104,7 +104,7 @@ impl LookupProvider for AbuseIpdbProvider {
     }
 
     async fn lookup(&self, ip: IpAddr) -> Result<ProviderVerdict, ProviderError> {
-        let now = OffsetDateTime::now_utc();
+        let now = self.runtime.clock().now();
         let url = format!("{}/check", self.base_url.trim_end_matches('/'));
         let request = self
             .runtime
@@ -119,7 +119,7 @@ impl LookupProvider for AbuseIpdbProvider {
             ]);
 
         let response = self.runtime.send(request, now).await?;
-        let body = read_body(response).await?;
+        let body = self.runtime.read_body(response).await?;
         let parsed: CheckResponse = parse_body(&body)?;
         let data = parsed.data;
 
@@ -193,7 +193,6 @@ impl LookupProvider for AbuseIpdbProvider {
         let Some(strength) = strength else {
             return Ok(ProviderVerdict::empty(
                 ProviderId::ABUSEIPDB,
-                SourceFamily::ABUSEIPDB,
                 CoverageLevel::Definitive,
             ));
         };
@@ -222,7 +221,6 @@ impl LookupProvider for AbuseIpdbProvider {
 
         Ok(ProviderVerdict {
             provider: ProviderId::ABUSEIPDB,
-            family: SourceFamily::ABUSEIPDB,
             coverage: CoverageLevel::Definitive,
             evidence: vec![evidence],
             suppression: None,

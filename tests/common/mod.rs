@@ -45,6 +45,11 @@ impl TestClock {
         let mut instant = self.instant.lock().expect("the clock is not poisoned");
         *instant += time::Duration::seconds(by.as_secs() as i64);
     }
+
+    /// The instant the clock reports.
+    pub fn instant(&self) -> OffsetDateTime {
+        *self.instant.lock().expect("the clock is not poisoned")
+    }
 }
 
 impl Clock for TestClock {

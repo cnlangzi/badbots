@@ -39,6 +39,7 @@ async fn provider_for(name: &str) -> (MockServer, CrowdSecProvider) {
         client,
         monthly_guard(120),
         Duration::from_secs(5),
+        badbots::clock::system_clock(),
     ));
     let provider = CrowdSecProvider::new(
         ApiKey::new("test-key"),
@@ -56,7 +57,7 @@ async fn a_malicious_behavior_convicts() {
     let verdict = provider.lookup(ip()).await.expect("the lookup succeeds");
 
     assert_eq!(verdict.provider, ProviderId::CROWDSEC);
-    assert_eq!(verdict.family, SourceFamily::CROWDSEC);
+    assert_eq!(provider.family(), SourceFamily::CROWDSEC);
     assert_eq!(provider.capability(), ProviderCapability::Primary);
     assert_eq!(verdict.evidence.len(), 1);
 

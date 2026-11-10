@@ -267,11 +267,22 @@ fn skip_quoted_string(chars: &[char], start: usize) -> Option<usize> {
 
 fn skip_comment(chars: &[char], start: usize) -> Option<usize> {
     let mut index = start + 1;
+    let mut depth = 1usize;
     while index < chars.len() {
         match chars[index] {
             '\\' => index += 2,
             '"' => index = skip_quoted_string(chars, index)?,
-            ')' => return Some(index + 1),
+            '(' => {
+                depth += 1;
+                index += 1;
+            }
+            ')' => {
+                depth -= 1;
+                index += 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
             _ => index += 1,
         }
     }
@@ -341,6 +352,24 @@ pub fn ua_state(user_agent: Option<&str>) -> UaState {
     }
 }
 
+/// Whether a haystack contains a needle, ignoring ASCII case.
+///
+/// The marker lists are matched on every request, so the comparison avoids
+/// allocating a lowercased copy of every marker.
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let haystack = haystack.as_bytes();
+    let needle = needle.as_bytes();
+    if needle.len() > haystack.len() {
+        return false;
+    }
+    haystack
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
 /// Classifies a user agent against the marker lists.
 ///
 /// A user agent is a bot when it declares itself one or when it carries none of
@@ -357,12 +386,11 @@ pub fn classify_user_agent(user_agent: Option<&str>, markers: &UserAgentMarkers)
         };
     };
 
-    let lowered = value.to_ascii_lowercase();
     let mut matched: Vec<String> = Vec::new();
     let mut kind: Option<BotKind> = None;
 
     for (marker, family) in &markers.families {
-        if lowered.contains(&marker.to_ascii_lowercase()) {
+        if contains_ignore_ascii_case(value, marker) {
             matched.push((*marker).clone());
             kind = Some(BotKind::Crawler);
             return BotVerdict {
@@ -376,13 +404,13 @@ pub fn classify_user_agent(user_agent: Option<&str>, markers: &UserAgentMarkers)
     }
 
     for marker in &markers.crawler_markers {
-        if lowered.contains(&marker.to_ascii_lowercase()) {
+        if contains_ignore_ascii_case(value, marker) {
             matched.push(marker.clone());
             kind = Some(BotKind::Crawler);
         }
     }
     for marker in &markers.automation_markers {
-        if lowered.contains(&marker.to_ascii_lowercase()) {
+        if contains_ignore_ascii_case(value, marker) {
             matched.push(marker.clone());
             kind.get_or_insert(BotKind::Automation);
         }
@@ -390,7 +418,7 @@ pub fn classify_user_agent(user_agent: Option<&str>, markers: &UserAgentMarkers)
 
     let mut browser_features = 0;
     for marker in &markers.browser_features {
-        if lowered.contains(&marker.to_ascii_lowercase()) {
+        if contains_ignore_ascii_case(value, marker) {
             matched.push(marker.clone());
             browser_features += 1;
         }
@@ -432,6 +460,13 @@ mod tests {
             "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
         ));
         assert!(is_well_formed_user_agent("MyApp/1.0 (build 42)"));
+    }
+
+    #[test]
+    fn accepts_a_nested_comment() {
+        assert!(is_well_formed_user_agent(
+            "Mozilla/5.0 (X11 (nested) Linux x86_64) Gecko/20100101 Firefox/121.0"
+        ));
     }
 
     #[test]

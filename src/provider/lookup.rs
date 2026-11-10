@@ -1,40 +1,57 @@
 //! The plumbing every lookup provider shares.
 //!
-//! A lookup is bounded by a timeout, counted against the local budget guard and
-//! limited by the per-provider rate limiter. A provider that answers with
-//! `429 Too Many Requests` is put into cooldown instead of being retried.
+//! A lookup is bounded by a timeout and counted against the local budget guard.
+//! A provider that answers with `429 Too Many Requests` is put into cooldown
+//! instead of being retried.
 
+use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 use time::OffsetDateTime;
 
+use crate::clock::Clock;
 use crate::error::ProviderError;
 use crate::http::{map_transport_error, parse_retry_after};
 use crate::quota::{QuotaGuard, QuotaWindow};
-use crate::ratelimit::{Cooldown, TokenBucket};
+use crate::ratelimit::Cooldown;
 
 /// The cooldown a provider enters when it does not advertise a `Retry-After`.
 pub const DEFAULT_COOLDOWN: Duration = Duration::from_secs(60);
 
 /// The runtime a lookup provider performs its request in.
-#[derive(Debug)]
 pub struct ProviderRuntime {
     client: reqwest::Client,
     cooldown: Cooldown,
     quota: QuotaGuard,
-    limiter: TokenBucket,
     timeout: Duration,
+    clock: Arc<dyn Clock>,
+}
+
+impl fmt::Debug for ProviderRuntime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProviderRuntime")
+            .field("cooldown", &self.cooldown)
+            .field("quota", &self.quota)
+            .field("timeout", &self.timeout)
+            .finish()
+    }
 }
 
 impl ProviderRuntime {
     /// Creates a runtime for one provider.
-    pub fn new(client: reqwest::Client, quota: QuotaGuard, timeout: Duration) -> Self {
+    pub fn new(
+        client: reqwest::Client,
+        quota: QuotaGuard,
+        timeout: Duration,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
         Self {
             client,
             cooldown: Cooldown::new(),
             quota,
-            limiter: TokenBucket::unlimited(),
             timeout,
+            clock,
         }
     }
 
@@ -51,6 +68,11 @@ impl ProviderRuntime {
     /// The cooldown of the provider.
     pub fn cooldown(&self) -> &Cooldown {
         &self.cooldown
+    }
+
+    /// The clock the provider reads the current time from.
+    pub fn clock(&self) -> &dyn Clock {
+        self.clock.as_ref()
     }
 
     /// Sends a request and returns the successful response.
@@ -70,10 +92,6 @@ impl ProviderRuntime {
 
         if !self.quota.try_consume(now) {
             return Err(ProviderError::QuotaExhausted);
-        }
-
-        if !self.limiter.try_acquire() {
-            return Err(ProviderError::RateLimited { retry_after: None });
         }
 
         let response = tokio::time::timeout(self.timeout, request.send())
@@ -106,14 +124,17 @@ impl ProviderRuntime {
             code: status.as_u16(),
         })
     }
-}
 
-/// Reads the body of a successful response.
-pub async fn read_body(response: reqwest::Response) -> Result<String, ProviderError> {
-    response
-        .text()
-        .await
-        .map_err(|error| map_transport_error(&error))
+    /// Reads the body of a successful response.
+    ///
+    /// The read is bounded by the same timeout as the request, so a response
+    /// that delivers its headers and then stalls cannot hold a lookup open.
+    pub async fn read_body(&self, response: reqwest::Response) -> Result<String, ProviderError> {
+        tokio::time::timeout(self.timeout, response.text())
+            .await
+            .map_err(|_| ProviderError::Timeout)?
+            .map_err(|error| map_transport_error(&error))
+    }
 }
 
 /// Parses a JSON body.
