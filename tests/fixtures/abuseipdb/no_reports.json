@@ -1,0 +1,19 @@
+{
+  "data": {
+    "ipAddress": "45.32.1.3",
+    "isPublic": true,
+    "ipVersion": 4,
+    "isWhitelisted": false,
+    "abuseConfidenceScore": 10,
+    "countryCode": "US",
+    "usageType": "Data Center",
+    "isp": "Example Hosting",
+    "domain": "example-hosting.test",
+    "hostnames": [],
+    "isTor": false,
+    "totalReports": 0,
+    "numDistinctUsers": 0,
+    "lastReportedAt": null,
+    "reports": []
+  }
+}

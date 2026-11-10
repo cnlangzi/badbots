@@ -1,0 +1,29 @@
+{
+  "data": {
+    "ipAddress": "45.32.1.3",
+    "isPublic": true,
+    "ipVersion": 4,
+    "isWhitelisted": false,
+    "abuseConfidenceScore": 100,
+    "countryCode": "US",
+    "usageType": "Data Center",
+    "isp": "Example Hosting",
+    "domain": "example-hosting.test",
+    "hostnames": [],
+    "isTor": false,
+    "totalReports": 6,
+    "numDistinctUsers": 4,
+    "lastReportedAt": "2020-01-01T00:00:00+00:00",
+    "reports": [
+      {
+        "reportedAt": "2020-01-01T00:00:00+00:00",
+        "comment": "Web application attack",
+        "categories": [
+          21
+        ],
+        "reporterCountryCode": "NL",
+        "reporterCount": 1
+      }
+    ]
+  }
+}
