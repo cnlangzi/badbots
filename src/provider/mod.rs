@@ -100,6 +100,9 @@ pub struct FeedSnapshot {
 #[async_trait]
 pub trait LookupProvider: Send + Sync {
     /// The identifier of the provider.
+    ///
+    /// The identifier is the key a suppression is matched against, so the
+    /// engine takes it from here rather than from the observations themselves.
     fn id(&self) -> ProviderId;
     /// The upstream data lineage of the provider.
     ///

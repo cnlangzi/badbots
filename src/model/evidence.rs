@@ -205,6 +205,10 @@ impl MatchScope {
 ///
 /// A suppression speaks for the provider that published it. It constrains the
 /// evidence of that provider alone and never the evidence of another provider.
+///
+/// `Safe` is the stronger of the two, so a provider that published both is
+/// treated as `Safe`. The strength is a rule of the engine, not of the order
+/// the variants are declared in.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Suppression {
@@ -229,6 +233,9 @@ pub struct ObservationWindow {
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct Evidence {
     /// The provider that produced the observation.
+    ///
+    /// A suppression applies to the observations of the provider that published
+    /// it, so this id is the key the engine matches a suppression against.
     pub provider: ProviderId,
     /// The upstream data lineage the observation belongs to.
     pub family: SourceFamily,

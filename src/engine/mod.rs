@@ -23,17 +23,13 @@ use crate::model::{
 pub fn classify(input: &VerdictInput, config: &Config, now: OffsetDateTime) -> IpVerdict {
     let policy = config.network_scope_policy;
 
+    let suppressions = suppressions_by_provider(&input.suppressions);
+
     let (valid, expired): (Vec<&Evidence>, Vec<&Evidence>) = input
         .evidence
         .iter()
-        .partition(|evidence| evidence.is_valid_at(now));
-
-    let suppressions = suppressions_by_provider(&input.suppressions);
-
-    let valid: Vec<&Evidence> = valid
-        .into_iter()
         .filter(|evidence| suppressions.get(&evidence.provider) != Some(&Suppression::Safe))
-        .collect();
+        .partition(|evidence| evidence.is_valid_at(now));
 
     let single_source = valid.iter().any(|evidence| {
         suppressions.get(&evidence.provider) != Some(&Suppression::Benign)
@@ -373,6 +369,47 @@ mod tests {
             vec![(ProviderId::new("abuseipdb"), Suppression::Safe)]
         );
         assert_eq!(voting_families(&verdict, &config), 0);
+    }
+
+    #[test]
+    fn a_safe_suppression_voids_an_expired_observation() {
+        let mut expired = exact_convicting("abuseipdb", "abuseipdb");
+        expired.expires_at = Some(now() - Duration::hours(1));
+        let mut input = input(vec![expired]);
+        input
+            .suppressions
+            .push((ProviderId::new("abuseipdb"), Suppression::Safe));
+        input
+            .coverage
+            .record_success(ProviderId::new("abuseipdb"), CoverageLevel::Definitive);
+        let verdict = classify(&input, &Config::default(), now());
+        assert_eq!(verdict.classification, Classification::Unknown);
+        assert_eq!(verdict.reason, VerdictReason::NoEvidence);
+    }
+
+    #[test]
+    fn the_strongest_suppression_of_a_provider_wins() {
+        let mut safe_first = input(vec![exact_convicting("abuseipdb", "abuseipdb")]);
+        safe_first
+            .suppressions
+            .push((ProviderId::new("abuseipdb"), Suppression::Safe));
+        safe_first
+            .suppressions
+            .push((ProviderId::new("abuseipdb"), Suppression::Benign));
+        let verdict = classify(&safe_first, &Config::default(), now());
+        assert_eq!(verdict.classification, Classification::Unknown);
+        assert!(verdict.evidence.is_empty());
+
+        let mut benign_first = input(vec![exact_convicting("abuseipdb", "abuseipdb")]);
+        benign_first
+            .suppressions
+            .push((ProviderId::new("abuseipdb"), Suppression::Benign));
+        benign_first
+            .suppressions
+            .push((ProviderId::new("abuseipdb"), Suppression::Safe));
+        let verdict = classify(&benign_first, &Config::default(), now());
+        assert_eq!(verdict.classification, Classification::Unknown);
+        assert!(verdict.evidence.is_empty());
     }
 
     #[test]

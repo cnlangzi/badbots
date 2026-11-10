@@ -112,7 +112,8 @@ that uses this provider is bound by those terms; this library does not
 restate or reinterpret them. The upstream names itself in the fields it
 returns, and this library preserves those fields in the upstream values of the
 verdict so that an attribution requirement can be met from the evidence the
-host already stores.
+host already stores. A whitelisted address yields no observation, so the
+upstream values of that address do not reach the verdict.
 
 ## Known false-positive profile
 

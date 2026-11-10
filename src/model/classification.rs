@@ -98,6 +98,9 @@ pub struct IpVerdict {
     /// Why the outcome is what it is.
     pub reason: VerdictReason,
     /// Every valid observation the verdict was derived from.
+    ///
+    /// The observations of a provider that published a `Safe` suppression are
+    /// absent, because that provider withdrew its own claim.
     pub evidence: Vec<Evidence>,
     /// The provider-side suppressions that apply.
     pub suppressions: Vec<(ProviderId, Suppression)>,
