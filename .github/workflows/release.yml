@@ -25,15 +25,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Check the manifest version
+      - name: Set the version from the tag
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          manifest=$(sed -n -E 's|^version = "(.*)"$|\1|p' Cargo.toml | head -1)
-          if [ "$manifest" != "$VERSION" ]; then
-            echo "::error::Cargo.toml carries $manifest but the release carries $VERSION"
-            exit 1
-          fi
+        run: scripts/set-version.sh "$VERSION"
 
       - name: Check the formatting
         run: cargo fmt --all -- --check
@@ -60,6 +55,6 @@ jobs:
 
       - name: Publish to crates.io
         if: steps.registry.outputs.status != '200'
-        run: cargo publish
+        run: cargo publish --allow-dirty
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
