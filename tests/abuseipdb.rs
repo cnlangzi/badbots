@@ -99,7 +99,7 @@ async fn a_strong_recent_report_convicts() {
 }
 
 #[tokio::test]
-async fn a_low_score_is_only_a_suspect_signal() {
+async fn a_low_score_is_only_an_indicative_signal() {
     let (_server, provider) = provider_for("low_score.json").await;
     let verdict = provider.lookup(ip()).await.expect("the lookup succeeds");
 
@@ -108,7 +108,7 @@ async fn a_low_score_is_only_a_suspect_signal() {
 }
 
 #[tokio::test]
-async fn a_single_reporter_is_only_a_suspect_signal() {
+async fn a_single_reporter_is_only_an_indicative_signal() {
     let (_server, provider) = provider_for("single_user.json").await;
     let verdict = provider.lookup(ip()).await.expect("the lookup succeeds");
 
@@ -117,7 +117,7 @@ async fn a_single_reporter_is_only_a_suspect_signal() {
 }
 
 #[tokio::test]
-async fn a_moderate_score_with_several_reporters_is_a_suspect_signal() {
+async fn a_moderate_score_with_several_reporters_is_an_indicative_signal() {
     let (_server, provider) = provider_for("single_user_low_score.json").await;
     let verdict = provider.lookup(ip()).await.expect("the lookup succeeds");
 
@@ -126,7 +126,7 @@ async fn a_moderate_score_with_several_reporters_is_a_suspect_signal() {
 }
 
 #[tokio::test]
-async fn a_port_scan_alone_is_a_suspect_signal() {
+async fn a_port_scan_alone_is_an_indicative_signal() {
     let (_server, provider) = provider_for("port_scan_only.json").await;
     let verdict = provider.lookup(ip()).await.expect("the lookup succeeds");
 
@@ -136,7 +136,7 @@ async fn a_port_scan_alone_is_a_suspect_signal() {
 }
 
 #[tokio::test]
-async fn a_spam_report_alone_is_a_suspect_signal() {
+async fn a_spam_report_alone_is_an_indicative_signal() {
     let (_server, provider) = provider_for("spam_only.json").await;
     let verdict = provider.lookup(ip()).await.expect("the lookup succeeds");
 

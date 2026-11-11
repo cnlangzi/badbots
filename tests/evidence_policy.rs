@@ -353,7 +353,7 @@ async fn a_provider_without_observations_is_not_a_hit() {
     assert_eq!(
         paths(&server).await,
         vec!["/low".to_string(), "/medium".to_string()],
-        "the consultation stopped at the provider that reported nothing"
+        "the consultation did not continue after the provider that reported nothing"
     );
 }
 

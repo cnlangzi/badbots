@@ -79,7 +79,7 @@ async fn a_malicious_behavior_convicts() {
 }
 
 #[tokio::test]
-async fn a_high_background_noise_only_suspects() {
+async fn a_high_background_noise_only_produces_an_indicative_observation() {
     let (_server, provider) = provider_for("background_noise_high.json").await;
     let verdict = provider.lookup(ip()).await.expect("the lookup succeeds");
 
@@ -88,7 +88,7 @@ async fn a_high_background_noise_only_suspects() {
 }
 
 #[tokio::test]
-async fn a_suspicious_reputation_only_suspects() {
+async fn a_suspicious_reputation_only_produces_an_indicative_observation() {
     let (_server, provider) = provider_for("suspicious_scan.json").await;
     let verdict = provider.lookup(ip()).await.expect("the lookup succeeds");
 
@@ -97,7 +97,8 @@ async fn a_suspicious_reputation_only_suspects() {
 }
 
 #[tokio::test]
-async fn a_malicious_reputation_without_a_malicious_behavior_only_suspects() {
+async fn a_malicious_reputation_without_a_malicious_behavior_only_produces_an_indicative_observation()
+ {
     let (_server, provider) = provider_for("malicious_generic_scan.json").await;
     let verdict = provider.lookup(ip()).await.expect("the lookup succeeds");
 
