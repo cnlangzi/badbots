@@ -85,7 +85,8 @@ struct Inner {
     config: Config,
     providers: Vec<Arc<dyn LookupProvider>>,
     feed_providers: Vec<Arc<dyn FeedProvider>>,
-    runtimes: HashMap<ProviderId, Arc<ProviderRuntime>>,
+    lookup_runtimes: HashMap<ProviderId, Arc<ProviderRuntime>>,
+    feed_runtimes: HashMap<ProviderId, Arc<ProviderRuntime>>,
     cache: TtlCache<ProviderFinding>,
     health: Mutex<HashMap<ProviderId, ProviderHealth>>,
     refreshes: Mutex<HashMap<ProviderId, OffsetDateTime>>,
@@ -475,7 +476,7 @@ impl BadBots {
         health: Option<&ProviderHealth>,
         now: OffsetDateTime,
     ) -> ProviderStatus {
-        let runtime = self.inner.runtimes.get(&provider);
+        let runtime = self.inner.lookup_runtimes.get(&provider);
         ProviderStatus {
             provider,
             family,
@@ -485,7 +486,7 @@ impl BadBots {
             last_attempt: health.and_then(|health| health.last_attempt),
             last_error: health.and_then(|health| health.last_error.clone()),
             quota_used: runtime.map(|runtime| runtime.quota().used(now)),
-            quota_limit: runtime.map(|runtime| runtime.quota().limit()),
+            quota_limit: runtime.and_then(|runtime| runtime.quota().bounded_limit()),
             entries: None,
             published_at: None,
             next_refresh_at: None,
@@ -501,7 +502,7 @@ impl BadBots {
         health: Option<&ProviderHealth>,
         now: OffsetDateTime,
     ) -> ProviderStatus {
-        let runtime = self.inner.runtimes.get(&provider);
+        let runtime = self.inner.feed_runtimes.get(&provider);
         let feeds = self.loaded_feeds();
         let feed = feeds.get(&provider);
         let next_refresh_at = self.next_refresh_at(&provider);
@@ -515,7 +516,7 @@ impl BadBots {
             last_attempt: health.and_then(|health| health.last_attempt),
             last_error: health.and_then(|health| health.last_error.clone()),
             quota_used: runtime.map(|runtime| runtime.quota().used(now)),
-            quota_limit: runtime.map(|runtime| runtime.quota().limit()),
+            quota_limit: runtime.and_then(|runtime| runtime.quota().bounded_limit()),
             entries: feed
                 .map(|feed| u32::try_from(feed.snapshot.entries.len()).unwrap_or(u32::MAX)),
             published_at: feed.and_then(|feed| feed.snapshot.published_at),
@@ -1016,11 +1017,11 @@ impl BadBotsBuilder {
         let clock = self.clock.unwrap_or_else(clock::system_clock);
         let registered = registered_providers(&config, &client, &clock)?;
         let mut providers: Vec<Arc<dyn LookupProvider>> = Vec::with_capacity(registered.len());
-        let mut runtimes: HashMap<ProviderId, Arc<ProviderRuntime>> = HashMap::new();
+        let mut lookup_runtimes: HashMap<ProviderId, Arc<ProviderRuntime>> = HashMap::new();
         let mut ids: Vec<ProviderId> = Vec::with_capacity(registered.len());
         for entry in registered {
             ids.push(entry.provider.id());
-            runtimes.insert(entry.provider.id(), Arc::clone(&entry.runtime));
+            lookup_runtimes.insert(entry.provider.id(), Arc::clone(&entry.runtime));
             providers.push(entry.provider);
         }
 
@@ -1034,16 +1035,16 @@ impl BadBotsBuilder {
             let provider = (registration.factory)(Arc::clone(&runtime));
             let id = provider.id();
             if ids.contains(&id) {
-                return Err(ConfigError::Invalid(format!(
-                    "the provider {id} is registered twice"
-                )));
+                return Err(ConfigError::Invalid(format!("duplicate provider id {id}")));
             }
             ids.push(id.clone());
-            runtimes.insert(id, runtime);
+            lookup_runtimes.insert(id, runtime);
             providers.push(provider);
         }
 
-        let mut feed_providers = registered_feed_providers(&config, &client, &clock, &mut runtimes);
+        let mut feed_runtimes: HashMap<ProviderId, Arc<ProviderRuntime>> = HashMap::new();
+        let mut feed_providers =
+            registered_feed_providers(&config, &client, &clock, &mut feed_runtimes);
         for registration in self.feed_registrations {
             let runtime = Arc::new(ProviderRuntime::new(
                 client.clone(),
@@ -1054,8 +1055,8 @@ impl BadBotsBuilder {
             let provider = (registration.factory)(Arc::clone(&runtime));
             let id = provider.id();
             feed_providers.retain(|registered| registered.id() != id);
-            runtimes.remove(&id);
-            runtimes.insert(id, runtime);
+            feed_runtimes.remove(&id);
+            feed_runtimes.insert(id, runtime);
             feed_providers.push(provider);
         }
 
@@ -1070,7 +1071,8 @@ impl BadBotsBuilder {
                 config,
                 providers,
                 feed_providers,
-                runtimes,
+                lookup_runtimes,
+                feed_runtimes,
                 health: Mutex::new(HashMap::new()),
                 refreshes: Mutex::new(HashMap::new()),
                 feeds: RwLock::new(Arc::new(LoadedFeeds::default())),

@@ -55,6 +55,10 @@ pub struct ProviderHealth {
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct ProviderFinding {
     /// The provider that answered.
+    ///
+    /// The engine takes the identity of a provider from the provider itself,
+    /// so this field is informational: it names the provider that produced the
+    /// finding, and it is never trusted.
     pub provider: ProviderId,
     /// How strongly the provider stated its answer.
     pub coverage: CoverageLevel,

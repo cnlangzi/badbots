@@ -5,9 +5,12 @@ mod common;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
-use badbots::provider::{LookupProvider, ProviderCapability, ProviderFinding};
+use badbots::provider::{
+    FeedProvider, FeedSnapshot, LookupProvider, ProviderCapability, ProviderFinding,
+};
 use badbots::{
     Assertion, BadBots, Classification, Config, ConfigError, CoverageLevel, Evidence,
     EvidenceStrength, MatchScope, ProviderError, ProviderId, ProviderRuntime, ProviderStatus,
@@ -97,6 +100,45 @@ impl LookupProvider for InternalProvider {
             evidence: vec![evidence],
             suppression: None,
             expires_at: None,
+        })
+    }
+}
+
+/// A list provider the host application registers with the library.
+struct InternalFeed {
+    runtime: Arc<ProviderRuntime>,
+    id: ProviderId,
+    family: SourceFamily,
+}
+
+#[async_trait]
+impl FeedProvider for InternalFeed {
+    fn id(&self) -> ProviderId {
+        self.id.clone()
+    }
+
+    fn family(&self) -> SourceFamily {
+        self.family.clone()
+    }
+
+    fn capability(&self) -> ProviderCapability {
+        ProviderCapability::Corroborating
+    }
+
+    fn min_refresh_interval(&self) -> Duration {
+        Duration::from_secs(60 * 60)
+    }
+
+    async fn fetch(&self) -> Result<FeedSnapshot, ProviderError> {
+        Ok(FeedSnapshot {
+            provider: self.id.clone(),
+            family: self.family.clone(),
+            published_at: None,
+            retrieved_at: self.runtime.clock().now(),
+            expires_at: None,
+            attribution: String::new(),
+            header_lines: Vec::new(),
+            entries: Vec::new(),
         })
     }
 }
@@ -287,6 +329,36 @@ async fn the_engine_stamps_the_identity_of_the_registering_provider() {
     );
 }
 
+#[tokio::test]
+async fn a_lookup_and_a_list_of_the_same_id_spend_their_own_quota() {
+    let bots = BadBots::builder()
+        .clock(Arc::new(TestClock::new(now())))
+        .lookup_provider(daily_guard(11), |runtime| {
+            internal(runtime, "shared", "shared")
+        })
+        .feed_provider(daily_guard(22), |runtime| InternalFeed {
+            runtime,
+            id: ProviderId::new("shared"),
+            family: SourceFamily::new("shared"),
+        })
+        .build()
+        .expect("the library is built");
+
+    let limits: Vec<Option<u32>> = bots
+        .provider_status()
+        .into_iter()
+        .filter(|status| status.provider == ProviderId::new("shared"))
+        .map(|status| status.quota_limit)
+        .collect();
+
+    assert_eq!(limits.len(), 2, "both providers are reported");
+    assert!(
+        limits.contains(&Some(11)),
+        "the lookup spends its own quota"
+    );
+    assert!(limits.contains(&Some(22)), "the list spends its own quota");
+}
+
 #[test]
 fn a_finding_can_be_serialized_and_read_back() {
     let finding = ProviderFinding {
@@ -449,6 +521,7 @@ async fn an_unlimited_quota_never_refuses_a_registered_provider() {
 
     let status = status_of(&bots, ProviderId::new("internal"));
     assert_eq!(status.quota_used, Some(5));
+    assert_eq!(status.quota_limit, None);
 }
 
 #[test]

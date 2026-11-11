@@ -67,6 +67,16 @@ impl QuotaGuard {
         self.limit
     }
 
+    /// The budget of the current window, when the guard has one.
+    ///
+    /// An unlimited guard has no budget, so it has no limit to report.
+    pub fn bounded_limit(&self) -> Option<u32> {
+        if self.unlimited {
+            return None;
+        }
+        Some(self.limit)
+    }
+
     /// The number of lookups already spent in the current window.
     pub fn used(&self, now: OffsetDateTime) -> u32 {
         let mut state = match self.state.lock() {
@@ -148,12 +158,13 @@ mod tests {
     }
 
     #[test]
-    fn an_unlimited_budget_never_refuses_a_request() {
+    fn an_unlimited_quota_never_refuses_a_request() {
         let guard = QuotaGuard::unlimited();
         let now = datetime!(2026-01-01 00:00:00 UTC);
         for _ in 0..1_000 {
             assert!(guard.try_consume(now));
         }
         assert_eq!(guard.used(now), 1_000);
+        assert_eq!(guard.bounded_limit(), None);
     }
 }
