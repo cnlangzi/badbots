@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use badbots::provider::{
-    FeedProvider, FeedSnapshot, LookupProvider, ProviderCapability, ProviderFinding,
+    FeedProvider, FeedSnapshot, LookupProvider, ProviderCapability, ProviderCost, ProviderFinding,
 };
 use badbots::{
     Assertion, BadBots, Classification, Config, CoverageLevel, Evidence, EvidenceStrength,
@@ -100,6 +100,10 @@ impl LookupProvider for TestProvider {
 
     fn capability(&self) -> ProviderCapability {
         self.capability
+    }
+
+    fn cost(&self) -> ProviderCost {
+        ProviderCost::Medium
     }
 
     async fn lookup(&self, ip: IpAddr) -> Result<ProviderFinding, ProviderError> {
@@ -664,6 +668,10 @@ impl LookupProvider for PanickingProvider {
 
     fn capability(&self) -> ProviderCapability {
         ProviderCapability::Primary
+    }
+
+    fn cost(&self) -> ProviderCost {
+        ProviderCost::Medium
     }
 
     async fn lookup(&self, _ip: IpAddr) -> Result<ProviderFinding, ProviderError> {

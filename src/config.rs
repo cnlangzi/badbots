@@ -20,6 +20,23 @@ pub enum NetworkScopePolicy {
     Allow,
 }
 
+/// How strict the evidence bar of a verdict is.
+///
+/// The policy is chosen once, when the library instance is built, because it
+/// decides which providers are worth spending quota on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidencePolicy {
+    /// One `Convicting` observation that satisfies the single-source condition,
+    /// or two corroborating source families, are needed for a conviction. This
+    /// is the default.
+    #[default]
+    Strict,
+    /// Every valid observation that no provider withdrew is enough for a
+    /// conviction.
+    Lenient,
+}
+
 /// The user-agent marker lists.
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub struct UserAgentConfig {
@@ -208,6 +225,9 @@ pub struct Config {
     /// How prefix-scoped observations may carry the verdict.
     #[serde(default)]
     pub network_scope_policy: NetworkScopePolicy,
+    /// How strict the evidence bar of a verdict is.
+    #[serde(default)]
+    pub evidence_policy: EvidencePolicy,
     /// The number of verifications that may run at the same time.
     #[serde(default = "default_max_concurrent_verifications")]
     pub max_concurrent_verifications: usize,
@@ -256,6 +276,7 @@ impl Default for Config {
             negative_ttl: default_negative_ttl(),
             failure_ttl: default_failure_ttl(),
             network_scope_policy: NetworkScopePolicy::default(),
+            evidence_policy: EvidencePolicy::default(),
             max_concurrent_verifications: default_max_concurrent_verifications(),
             cache_capacity: default_cache_capacity(),
             user_agent: UserAgentConfig::default(),

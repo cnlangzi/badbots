@@ -53,9 +53,9 @@ pub use config::{
     BLOCKLIST_DE_DEFAULT_MIN_REFRESH_INTERVAL, BLOCKLIST_DE_DEFAULT_WINDOW, BLOCKLIST_DE_FEATURE,
     BlocklistDeConfig, CROWDSEC_DEFAULT_BASE_URL, CROWDSEC_DEFAULT_MONTHLY_QUOTA, CROWDSEC_FEATURE,
     Config, CrowdSecConfig, DSHIELD_DEFAULT_BASE_URL, DSHIELD_DEFAULT_MIN_REFRESH_INTERVAL,
-    DSHIELD_FEATURE, DShieldConfig, FEED_DEFAULT_DAILY_QUOTA, NetworkScopePolicy, ProviderConfig,
-    SPAMHAUS_DEFAULT_BASE_URL, SPAMHAUS_DEFAULT_MIN_REFRESH_INTERVAL, SPAMHAUS_FEATURE,
-    SpamhausConfig, UserAgentConfig,
+    DSHIELD_FEATURE, DShieldConfig, EvidencePolicy, FEED_DEFAULT_DAILY_QUOTA, NetworkScopePolicy,
+    ProviderConfig, SPAMHAUS_DEFAULT_BASE_URL, SPAMHAUS_DEFAULT_MIN_REFRESH_INTERVAL,
+    SPAMHAUS_FEATURE, SpamhausConfig, UserAgentConfig,
 };
 pub use engine::classify;
 pub use error::{ConfigError, ProviderError};
@@ -68,7 +68,7 @@ pub use model::{
 pub use provider::lookup::{ProviderRuntime, daily_guard, monthly_guard};
 pub use provider::{
     FeedProvider, FeedRefreshReport, FeedRefreshResult, FeedSnapshot, LookupProvider,
-    ProviderCapability, ProviderFinding, ProviderStatus,
+    ProviderCapability, ProviderCost, ProviderFinding, ProviderStatus,
 };
 pub use quota::{QuotaGuard, QuotaWindow};
 pub use secret::ApiKey;
@@ -127,17 +127,33 @@ impl Shared {
             .filter(|provider| provider.capability() != ProviderCapability::Primary)
     }
 
-    /// The providers in the order a verification asks them.
-    fn ordered_providers(&self) -> impl Iterator<Item = &Arc<dyn LookupProvider>> {
-        self.primary_providers()
-            .chain(self.corroborating_providers())
+    /// The providers in the order the policy asks them.
+    ///
+    /// The strict policy asks the providers that may convict on their own
+    /// first, because a conviction on the first of them makes every later
+    /// request unnecessary. The lenient policy asks the providers from the
+    /// cheapest to the most expensive one, because it stops at the cheapest
+    /// provider that hits. Providers of the same price class keep their
+    /// registration order.
+    fn ordered_providers(&self) -> Vec<&Arc<dyn LookupProvider>> {
+        match self.config.evidence_policy {
+            EvidencePolicy::Strict => self
+                .primary_providers()
+                .chain(self.corroborating_providers())
+                .collect(),
+            EvidencePolicy::Lenient => {
+                let mut providers: Vec<&Arc<dyn LookupProvider>> = self.providers.iter().collect();
+                providers.sort_by_key(|provider| provider.cost());
+                providers
+            }
+        }
     }
 
     /// Composes the assessment of an address from the local state.
     ///
-    /// The providers are read in the order a verification asks them in, and the
-    /// reading stops as soon as the findings satisfy the conviction rule, so
-    /// that the coverage of the assessment is the coverage a verification would
+    /// The providers are read in the order the policy asks them in, and the
+    /// reading stops as soon as the findings satisfy the evidence bar, so that
+    /// the coverage of the assessment is the coverage a verification would
     /// report. The verification reads the answers in the same order and stops
     /// at the same point.
     fn compose(&self, ip: IpAddr, now: OffsetDateTime) -> IpVerdict {
@@ -148,7 +164,7 @@ impl Shared {
         }
 
         self.merge_feeds(&mut input);
-        if self.is_convicted(&input, now) {
+        if self.is_bad(&input, now) {
             return classify(&input, &self.config, now);
         }
 
@@ -166,7 +182,7 @@ impl Shared {
                 }
                 None => {}
             }
-            if self.is_convicted(&input, now) {
+            if self.is_bad(&input, now) {
                 return classify(&input, &self.config, now);
             }
         }
@@ -174,17 +190,17 @@ impl Shared {
         classify(&input, &self.config, now)
     }
 
-    /// Whether the findings that are collected so far satisfy the conviction
-    /// rule.
+    /// Whether the findings that are collected so far satisfy the evidence bar
+    /// of the policy.
     ///
-    /// The rule is the classification of the decision engine, so the condition
+    /// The bar is the classification of the decision engine, so the condition
     /// that ends the sequence of providers and the condition that produces the
     /// final assessment cannot drift apart.
     ///
     /// A provider that is not asked cannot suppress anything: a suppression
     /// withdraws the evidence of the provider that published it, so a provider
     /// that was not asked has no evidence to withdraw.
-    fn is_convicted(&self, input: &VerdictInput, now: OffsetDateTime) -> bool {
+    fn is_bad(&self, input: &VerdictInput, now: OffsetDateTime) -> bool {
         classify(input, &self.config, now).classification == Classification::Bad
     }
 
@@ -437,10 +453,10 @@ impl BadBots {
     /// already cached, from the failures that are already remembered and from
     /// the lists that are already loaded.
     ///
-    /// The assessment is composed in the order a verification asks the
-    /// providers in, and it stops reading as soon as the findings satisfy the
-    /// conviction rule, so that the coverage it reports is the coverage a
-    /// verification would report.
+    /// The assessment is composed in the order the policy asks the providers
+    /// in, and it stops reading as soon as the findings satisfy the evidence
+    /// bar, so that the coverage it reports is the coverage a verification
+    /// would report.
     ///
     /// An assessment that is not `Bad` makes sure that a verification of the
     /// address runs, so that the answer becomes more precise without the caller
@@ -906,6 +922,15 @@ impl BadBotsBuilder {
         self
     }
 
+    /// Sets how strict the evidence bar of a verdict is.
+    ///
+    /// The policy is fixed for the lifetime of the library instance, because it
+    /// decides which providers are worth spending quota on.
+    pub fn evidence_policy(mut self, policy: EvidencePolicy) -> Self {
+        self.config.evidence_policy = policy;
+        self
+    }
+
     /// Sets the number of verifications that may run at the same time.
     pub fn max_concurrent_verifications(mut self, max: usize) -> Self {
         self.config.max_concurrent_verifications = max;
@@ -957,7 +982,7 @@ impl BadBotsBuilder {
     /// use std::sync::Arc;
     ///
     /// use async_trait::async_trait;
-    /// use badbots::provider::{LookupProvider, ProviderCapability, ProviderFinding};
+    /// use badbots::provider::{LookupProvider, ProviderCapability, ProviderCost, ProviderFinding};
     /// use badbots::{
     ///     BadBots, Config, CoverageLevel, ProviderError, ProviderId, ProviderRuntime,
     ///     SourceFamily, daily_guard,
@@ -979,6 +1004,10 @@ impl BadBotsBuilder {
     ///
     ///     fn capability(&self) -> ProviderCapability {
     ///         ProviderCapability::Corroborating
+    ///     }
+    ///
+    ///     fn cost(&self) -> ProviderCost {
+    ///         ProviderCost::Medium
     ///     }
     ///
     ///     async fn lookup(&self, ip: IpAddr) -> Result<ProviderFinding, ProviderError> {

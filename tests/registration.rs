@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use badbots::provider::{
-    FeedProvider, FeedSnapshot, LookupProvider, ProviderCapability, ProviderFinding,
+    FeedProvider, FeedSnapshot, LookupProvider, ProviderCapability, ProviderCost, ProviderFinding,
 };
 use badbots::{
     Assertion, BadBots, Classification, Config, ConfigError, CoverageLevel, Evidence,
@@ -67,6 +67,10 @@ impl LookupProvider for InternalProvider {
 
     fn capability(&self) -> ProviderCapability {
         ProviderCapability::Corroborating
+    }
+
+    fn cost(&self) -> ProviderCost {
+        ProviderCost::Medium
     }
 
     async fn lookup(&self, ip: IpAddr) -> Result<ProviderFinding, ProviderError> {
@@ -416,8 +420,8 @@ async fn two_providers_of_one_family_count_as_one_vote() {
     let verdict = bots.verify_ip(address("45.32.1.1")).await;
 
     assert_eq!(verdict.evidence.len(), 2);
-    assert_eq!(verdict.classification, Classification::Suspect);
-    assert_eq!(verdict.reason, VerdictReason::EvidencePresent);
+    assert_eq!(verdict.classification, Classification::Unknown);
+    assert_eq!(verdict.reason, VerdictReason::InsufficientEvidence);
 }
 
 #[tokio::test]

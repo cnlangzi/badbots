@@ -10,7 +10,7 @@ other names the addresses that were seen attacking.
 
    ```toml
    [dependencies]
-   badbots = { version = "0.1", features = ["dshield"] }
+   badbots = { version = "0.2", features = ["dshield"] }
    ```
 
 2. Enable the provider and identify the operator:
@@ -149,11 +149,11 @@ succeeded.
 
 This library therefore keeps the two lists apart:
 
-| Situation | Effect |
-|---|---|
-| A subnet record without any other evidence | A `Suspect` verdict, and never a vote |
-| An address record with an attack label | A `Corroborating` observation that adds a vote |
-| Only DShield observed the address | Never a `Bad` verdict, because a family votes once |
+| Situation | Strict policy | Lenient policy |
+|---|---|---|
+| A subnet record without any other evidence | A `Unknown` verdict with the reason `InsufficientEvidence`, and never a vote | A `Bad` verdict |
+| An address record with an attack label | A `Corroborating` observation that adds a vote | A `Bad` verdict |
+| Only DShield observed the address | Never a `Bad` verdict, because a family votes once | A `Bad` verdict |
 
 The publisher also lists the addresses of open resolvers, exit nodes and
 services that merely receive traffic. Those labels produce no observation at

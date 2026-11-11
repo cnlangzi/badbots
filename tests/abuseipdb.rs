@@ -12,7 +12,9 @@ use badbots::provider::abuseipdb::AbuseIpdbProvider;
 use badbots::provider::lookup::{ProviderRuntime, daily_guard};
 use badbots::provider::{LookupProvider, ProviderCapability};
 use badbots::{
-    ApiKey, CoverageLevel, EvidenceStrength, ProviderError, ProviderId, SourceFamily, Suppression,
+    AbuseIpdbConfig, ApiKey, Assertion, BadBots, Classification, Config, CoverageLevel,
+    EvidencePolicy, EvidenceStrength, ProviderConfig, ProviderError, ProviderId, SourceFamily,
+    Suppression, VerdictReason,
 };
 use common::{fixture, render};
 use time::OffsetDateTime;
@@ -97,7 +99,7 @@ async fn a_strong_recent_report_convicts() {
 }
 
 #[tokio::test]
-async fn a_low_score_is_only_a_suspect_signal() {
+async fn a_low_score_is_only_an_indicative_signal() {
     let (_server, provider) = provider_for("low_score.json").await;
     let verdict = provider.lookup(ip()).await.expect("the lookup succeeds");
 
@@ -106,7 +108,7 @@ async fn a_low_score_is_only_a_suspect_signal() {
 }
 
 #[tokio::test]
-async fn a_single_reporter_is_only_a_suspect_signal() {
+async fn a_single_reporter_is_only_an_indicative_signal() {
     let (_server, provider) = provider_for("single_user.json").await;
     let verdict = provider.lookup(ip()).await.expect("the lookup succeeds");
 
@@ -115,7 +117,7 @@ async fn a_single_reporter_is_only_a_suspect_signal() {
 }
 
 #[tokio::test]
-async fn a_moderate_score_with_several_reporters_is_a_suspect_signal() {
+async fn a_moderate_score_with_several_reporters_is_an_indicative_signal() {
     let (_server, provider) = provider_for("single_user_low_score.json").await;
     let verdict = provider.lookup(ip()).await.expect("the lookup succeeds");
 
@@ -124,11 +126,70 @@ async fn a_moderate_score_with_several_reporters_is_a_suspect_signal() {
 }
 
 #[tokio::test]
-async fn a_port_scan_alone_produces_no_evidence() {
+async fn a_port_scan_alone_is_an_indicative_signal() {
     let (_server, provider) = provider_for("port_scan_only.json").await;
     let verdict = provider.lookup(ip()).await.expect("the lookup succeeds");
 
-    assert!(verdict.evidence.is_empty());
+    assert_eq!(verdict.evidence.len(), 1);
+    assert_eq!(verdict.evidence[0].strength, EvidenceStrength::Indicative);
+    assert_eq!(verdict.evidence[0].assertion, Assertion::Reconnaissance);
+}
+
+#[tokio::test]
+async fn a_spam_report_alone_is_an_indicative_signal() {
+    let (_server, provider) = provider_for("spam_only.json").await;
+    let verdict = provider.lookup(ip()).await.expect("the lookup succeeds");
+
+    assert_eq!(verdict.evidence.len(), 1);
+    assert_eq!(verdict.evidence[0].strength, EvidenceStrength::Indicative);
+    assert_eq!(verdict.evidence[0].assertion, Assertion::Abuse);
+}
+
+/// The configuration of a library that asks the AbuseIPDB provider.
+fn config_for(base_url: &str, policy: EvidencePolicy) -> Config {
+    Config {
+        evidence_policy: policy,
+        providers: ProviderConfig {
+            abuseipdb: Some(AbuseIpdbConfig {
+                enabled: true,
+                api_key: Some(ApiKey::new("test-key")),
+                daily_quota: None,
+                base_url: Some(base_url.to_string()),
+                max_age_days: None,
+            }),
+            ..ProviderConfig::default()
+        },
+        ..Config::default()
+    }
+}
+
+#[tokio::test]
+async fn a_spam_report_convicts_only_under_the_lenient_policy() {
+    let (server, _provider) = provider_for("spam_only.json").await;
+    let base_url = format!("{}/api/v2", server.uri());
+
+    let strict = BadBots::builder()
+        .config(config_for(&base_url, EvidencePolicy::Strict))
+        .build()
+        .expect("the library is built");
+    let lenient = BadBots::builder()
+        .config(config_for(&base_url, EvidencePolicy::Lenient))
+        .build()
+        .expect("the library is built");
+
+    let verdict = strict.verify_ip(ip()).await;
+    assert!(!verdict.evidence.is_empty());
+    assert_eq!(verdict.evidence[0].strength, EvidenceStrength::Indicative);
+    assert_eq!(verdict.evidence[0].assertion, Assertion::Abuse);
+    assert_eq!(verdict.classification, Classification::Unknown);
+    assert_eq!(verdict.reason, VerdictReason::InsufficientEvidence);
+
+    let verdict = lenient.verify_ip(ip()).await;
+    assert!(!verdict.evidence.is_empty());
+    assert_eq!(verdict.evidence[0].strength, EvidenceStrength::Indicative);
+    assert_eq!(verdict.evidence[0].assertion, Assertion::Abuse);
+    assert_eq!(verdict.classification, Classification::Bad);
+    assert_eq!(verdict.reason, VerdictReason::Convicted);
 }
 
 #[tokio::test]

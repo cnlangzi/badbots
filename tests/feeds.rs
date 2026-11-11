@@ -166,8 +166,8 @@ async fn a_loaded_list_answers_the_assessment_without_network_io() {
     assert_eq!(requests.len(), 2);
 
     let verdict = bots.assess_ip(address("1.10.16.5"));
-    assert_eq!(verdict.classification, Classification::Suspect);
-    assert_eq!(verdict.reason, VerdictReason::EvidencePresent);
+    assert_eq!(verdict.classification, Classification::Unknown);
+    assert_eq!(verdict.reason, VerdictReason::InsufficientEvidence);
     assert_eq!(verdict.evidence.len(), 1);
     assert_eq!(verdict.evidence[0].family, SourceFamily::SPAMHAUS);
 
@@ -221,7 +221,7 @@ async fn a_list_that_cannot_be_read_keeps_the_previous_one() {
     assert!(matches!(failure.result, Err(ProviderError::Parse(_))));
 
     let verdict = bots.assess_ip(address("1.10.16.5"));
-    assert_eq!(verdict.classification, Classification::Suspect);
+    assert_eq!(verdict.classification, Classification::Unknown);
     assert_eq!(verdict.evidence.len(), 1);
     assert_eq!(verdict.evidence[0].family, SourceFamily::SPAMHAUS);
 }
@@ -477,8 +477,8 @@ async fn a_list_alone_never_convicts() {
     bots.refresh_feeds().await;
 
     let verdict = bots.assess_ip(address("1.10.16.5"));
-    assert_eq!(verdict.classification, Classification::Suspect);
-    assert_eq!(verdict.reason, VerdictReason::EvidencePresent);
+    assert_eq!(verdict.classification, Classification::Unknown);
+    assert_eq!(verdict.reason, VerdictReason::InsufficientEvidence);
 }
 
 #[tokio::test]
@@ -570,7 +570,7 @@ async fn one_family_never_convicts_and_two_families_do() {
         .expect("the library is built");
 
     let verdict = bots.verify_ip(address("45.32.1.1")).await;
-    assert_eq!(verdict.classification, Classification::Suspect);
+    assert_eq!(verdict.classification, Classification::Unknown);
 
     Mock::given(method("GET"))
         .and(path("/threatintel.txt"))

@@ -19,7 +19,7 @@ use crate::model::{
     SourceFamily, Suppression, ThreatCategory,
 };
 use crate::provider::lookup::{ProviderRuntime, parse_body};
-use crate::provider::{LookupProvider, ProviderCapability, ProviderFinding};
+use crate::provider::{LookupProvider, ProviderCapability, ProviderCost, ProviderFinding};
 use crate::secret::ApiKey;
 
 /// The number of days a positive result stays usable.
@@ -132,6 +132,10 @@ impl LookupProvider for CrowdSecProvider {
 
     fn capability(&self) -> ProviderCapability {
         ProviderCapability::Primary
+    }
+
+    fn cost(&self) -> ProviderCost {
+        ProviderCost::High
     }
 
     async fn lookup(&self, ip: IpAddr) -> Result<ProviderFinding, ProviderError> {
@@ -393,9 +397,32 @@ struct History {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use std::time::Duration;
 
-    use super::{default_intents, intent_of, threat_category};
+    use super::{CrowdSecProvider, default_intents, intent_of, threat_category};
     use crate::model::{BehaviorIntent, ThreatCategory};
+    use crate::provider::lookup::{ProviderRuntime, monthly_guard};
+    use crate::provider::{LookupProvider, ProviderCost};
+    use crate::secret::ApiKey;
+
+    #[test]
+    fn the_provider_states_its_cost() {
+        let runtime = Arc::new(ProviderRuntime::new(
+            crate::http::build_client(Duration::from_secs(5)).expect("the client is built"),
+            monthly_guard(10),
+            Duration::from_secs(5),
+            crate::clock::system_clock(),
+        ));
+        let provider = CrowdSecProvider::new(
+            ApiKey::new("test-key"),
+            "https://cti.api.crowdsec.net/v2",
+            BTreeMap::new(),
+            runtime,
+        );
+
+        assert_eq!(provider.cost(), ProviderCost::High);
+    }
 
     #[test]
     fn an_exploit_behavior_is_malicious() {

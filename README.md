@@ -8,7 +8,10 @@ apply their own enforcement policy.
 The library is **precision-first**: an address is flagged only when a source
 makes a specific, current, verifiable claim that it committed an attack. A false
 positive is far more costly than a false negative, so the design accepts short
-coverage rather than noisy verdicts.
+coverage rather than noisy verdicts. A host that has already reached its own
+conclusion about a client and only wants an independent opinion about the
+client's address switches the library to the lenient policy, which accepts any
+report of doubt.
 
 The library never blocks, bans or otherwise enforces a policy, and it holds no
 allowlist of its own: an exemption is the host's own decision.
@@ -23,7 +26,7 @@ asked only when the host is already suspicious.
 
 ```toml
 [dependencies]
-badbots = { version = "0.1", features = ["full"] }
+badbots = { version = "0.2", features = ["full"] }
 ```
 
 ```rust
@@ -46,8 +49,7 @@ let verdict = bots.verify_ip(client_ip).await;
 
 match verdict.classification {
     badbots::Classification::Bad => { /* the host decides what to do */ }
-    badbots::Classification::Suspect => { /* observe, or apply a soft policy */ }
-    badbots::Classification::Unknown => { /* no intelligence was available */ }
+    badbots::Classification::Unknown => { /* no conviction was reached */ }
 }
 ```
 
@@ -96,13 +98,12 @@ The worker starts with the first verification and stops when the last handle of
 the library is dropped, so a host that only asks the bot question pays for
 nothing.
 
-## The three verdicts
+## The two verdicts
 
 | Verdict | Meaning |
 |---|---|
-| `Bad` | A conviction rule was satisfied: either one `Convicting` observation about this exact address, or two observations from different source families that corroborate each other. |
-| `Suspect` | Valid evidence exists but no conviction rule was satisfied. |
-| `Unknown` | No usable evidence exists. The reason distinguishes the cases. |
+| `Bad` | The evidence bar of the policy was satisfied. |
+| `Unknown` | The evidence bar of the policy was not satisfied. The reason distinguishes the cases. |
 
 There is no "clean" verdict and no numeric score. Absence of intelligence is
 reported as `Unknown`, never as a clean bill of health.
@@ -110,17 +111,58 @@ reported as `Unknown`, never as a clean bill of health.
 | Reason | Meaning |
 |---|---|
 | `Convicted` | The verdict is `Bad`. |
-| `EvidencePresent` | The verdict is `Suspect`. |
+| `InsufficientEvidence` | Observations exist but do not satisfy the evidence bar. |
 | `EvidenceExpired` | Evidence existed but had expired. |
 | `NoEvidence` | Providers were consulted and reported nothing. |
 | `NoCoverage` | Nothing was consulted successfully. |
 
-Prefix-scoped observations never convict on their own: a network listing is a
-statement about a range, and whole-range listings have produced real collateral
-damage for hosting customers. A prefix-scoped observation may add a vote to
-another family's observation. `Config::network_scope_policy` can be set to
-`NetworkScopePolicy::Allow` to let prefix-scoped observations satisfy the
-single-source path as well.
+### The two policies
+
+The evidence bar and the order of the providers are chosen once, when the
+library instance is built, because both decide which providers are worth
+spending quota on. `Config::evidence_policy` carries the policy and
+`BadBotsBuilder::evidence_policy` sets it:
+
+```rust
+let bots = BadBots::builder()
+    .evidence_policy(badbots::EvidencePolicy::Lenient)
+    .build()?;
+```
+
+| | `EvidencePolicy::Strict` | `EvidencePolicy::Lenient` |
+|---|---|---|
+| The evidence bar | One `Convicting` observation about this exact address, or two observations from different source families that corroborate each other | Every valid observation that no provider withdrew |
+| The order of the providers | The providers that may convict on their own are asked first, then the others | The providers are asked from the cheapest to the most expensive one |
+| A prefix-scoped observation | Never convicts on its own, but adds a vote to another family's observation | Convicts on its own |
+| An `Indicative` observation | Never convicts on its own | Convicts on its own |
+
+The strict policy is the default and keeps the precision-first design of the
+library: a false positive is far more costly than a false negative. The lenient
+policy is for a host that has already reached its own conclusion about a client
+and wants an independent opinion about the client's address, where any report
+of doubt is enough.
+
+Under the strict policy, prefix-scoped observations never convict on their own:
+a network listing is a statement about a range, and whole-range listings have
+produced real collateral damage for hosting customers. A prefix-scoped
+observation may add a vote to another family's observation.
+`Config::network_scope_policy` can be set to `NetworkScopePolicy::Allow` to let
+prefix-scoped observations satisfy the single-source path as well. The knob
+governs the strict policy only: the lenient bar already accepts range-wide
+observations, so it has no meaning there.
+
+### The suppressions
+
+A suppression speaks for the provider that published it and constrains the
+evidence of that provider alone.
+
+| Suppression | Effect under the strict policy | Effect under the lenient policy |
+|---|---|---|
+| `Safe` | The observations of the provider are void | The observations of the provider are void |
+| `Benign` | The observations may corroborate another family but never convict on their own | The observations do not convict on their own but coexist with another family's observations |
+
+Neither of them constrains the evidence of another provider, so an address that
+one provider suppresses may still be convicted by another.
 
 ## Coverage
 
@@ -145,13 +187,13 @@ it produced an observation for is `definitive`, an address it did not match is
 
 ## Providers
 
-| Provider | Feature | Capability | Quota guard | Convicts alone |
-|---|---|---|---|---|
-| [AbuseIPDB](docs/providers/abuseipdb.md) | `abuseipdb` | Primary | 1,000 per day | Yes, with score ≥ 75, ≥ 2 distinct reporters, a report within 30 days and an inbound-attack category |
-| [CrowdSec CTI](docs/providers/crowdsec.md) | `crowdsec` | Primary | 120 per month | Yes, with a malicious reputation and a malicious behavior, or a blocklist classification or reference |
-| [Spamhaus DROP](docs/providers/spamhaus.md) | `spamhaus` | Corroborating | 10,000 per day | No, a listing is a statement about a range |
-| [Blocklist.de](docs/providers/blocklist-de.md) | `blocklist_de` | Corroborating | 10,000 per day | No, only the attack count of the per-address query adds a vote |
-| [DShield](docs/providers/dshield.md) | `dshield` | Corroborating | 10,000 per day | No, only an attack record adds a vote |
+| Provider | Feature | Capability | Lookup cost | Quota guard | Convicts alone |
+|---|---|---|---|---|---|
+| [AbuseIPDB](docs/providers/abuseipdb.md) | `abuseipdb` | Primary | Medium | 1,000 per day | Yes, with score ≥ 75, ≥ 2 distinct reporters, a report within 30 days and an inbound-attack category |
+| [CrowdSec CTI](docs/providers/crowdsec.md) | `crowdsec` | Primary | High | 120 per month | Yes, with a malicious reputation and a malicious behavior, or a blocklist classification or reference |
+| [Blocklist.de](docs/providers/blocklist-de.md) | `blocklist_de` | Corroborating | Low | 10,000 per day | No, only the attack count of the per-address query adds a vote |
+| [Spamhaus DROP](docs/providers/spamhaus.md) | `spamhaus` | Corroborating | — | 10,000 per day | No, a listing is a statement about a range |
+| [DShield](docs/providers/dshield.md) | `dshield` | Corroborating | — | 10,000 per day | No, only an attack record adds a vote |
 
 Every provider is opt-in twice over: the Cargo feature has to be compiled in
 **and** the configuration has to enable the provider. A provider that is
@@ -160,19 +202,34 @@ enabled in the configuration but whose feature is absent is reported as
 
 The `full` feature enables every provider the crate ships.
 
+The lookup cost is what the lenient policy orders the lookup providers by. A
+provider the host registers states its own cost through
+`LookupProvider::cost()`. The publishers that publish a list have no lookup
+provider at all, and the lists are consulted first under either policy.
+
 ### The order of the providers
 
-A verification spends the quota of as few providers as it can:
+A verification spends the quota of as few providers as it can.
+
+Under the strict policy:
 
 1. The loaded lists are merged first. They are local and free, and their
    findings can complete a corroboration without spending any quota.
 2. The Primary providers are asked one at a time. A Primary provider may
    convict on its own, which makes every later request unnecessary, so the
-   sequence ends as soon as the findings satisfy the conviction rule.
+   sequence ends as soon as the findings satisfy the evidence bar.
 3. The providers that cannot convict on their own are asked together, because
    asking them one at a time would only add latency. The phase waits for every
    provider it asked: the quota of a request is spent when the request is sent,
    so an abandoned request would spend quota and lose the answer.
+
+Under the lenient policy:
+
+1. The loaded lists are merged first, for the same reason.
+2. The lookup providers are asked one at a time, from the cheapest to the most
+   expensive one, and the sequence ends at the first provider that reports an
+   observation. A provider that reports nothing is not a hit, so the
+   consultation moves on to the next one.
 
 An assessment composes its verdict in the same order and stops at the same
 point, so the coverage it reports is the coverage a verification would report.
@@ -203,9 +260,9 @@ publisher that is unreachable does not empty the index.
 | Blocklist.de service lists | 30 minutes |
 | DShield | 1 hour |
 
-A list never convicts an address on its own. Two observations of the same
-source family count as one vote, so a list and a mirror of it never make a
-verdict stronger.
+A list never convicts an address on its own under the strict policy. Two
+observations of the same source family count as one vote, so a list and a
+mirror of it never make a verdict stronger.
 
 The publisher of a list may ask for its credit and its terms to be
 reproduced. The loaded list keeps them verbatim:
@@ -246,6 +303,13 @@ and it appears in `provider_status()` with the quota it spends. The identifier
 of a registered provider has to be unique, because the cache is keyed by it: a
 build with two providers of the same id fails with `ConfigError::Invalid`.
 
+A registered lookup provider states what a lookup of it costs through
+`LookupProvider::cost()`. The lenient policy asks the lookup providers from the
+cheapest to the most expensive one, so a host that registers a provider knows
+where it is asked. The method has no default: a provider that silently
+inherited a price class would sit in the wrong position of the order without
+anyone noticing.
+
 The engine takes the identity of a provider from the provider itself, so a
 finding cannot claim the identity of another provider. A host that wants its
 provider to count as one vote with a built-in provider reports the source family
@@ -259,10 +323,10 @@ to do about it.
 | Verdict | Suggested first step | Suggested second step |
 |---|---|---|
 | `Bad` | Block or challenge, according to the host's policy | Keep the evidence for the incident record |
-| `Suspect` | Observe, rate limit or step up a challenge | Tighten the policy after measuring the false-positive rate |
 | `Unknown` with reason `NoCoverage` | Treat as unclassified | Check that the providers are reachable and enabled |
 | `Unknown` with reason `NoEvidence` | Treat as unclassified | Refresh the intelligence before the next decision |
 | `Unknown` with reason `EvidenceExpired` | Treat as unclassified | The claim about the address is too old to act on |
+| `Unknown` with reason `InsufficientEvidence` | Observe, rate limit or step up a challenge | Tighten the policy after measuring the false-positive rate |
 
 The verdict carries the evidence it was derived from, including the upstream
 values, so a host that needs a different granularity of trust can derive its own
@@ -327,20 +391,22 @@ below are publisher statements about the sources themselves:
 | The share of observed malicious traffic that carries a `Bad` verdict is in the single-digit percentage range | Expectation derived from the design of the sources. No independent measurement exists |
 
 The coverage is short by design. The sources report addresses that a community
-has already flagged, a conviction needs either one strong claim or two
-independent claims, and the sources do not cover every attack category. A host
-that needs more coverage adds a provider rather than loosening the rules.
+has already flagged, a conviction under the strict policy needs either one
+strong claim or two independent claims, and the sources do not cover every
+attack category. A host that needs more coverage adds a provider; a host that
+needs a lower bar uses the lenient policy.
 
 ## Staged rollout
 
 1. **Observe only.** Enable the providers, call `verify_ip` off the request
    path, and record the verdicts. Do not enforce anything. Measure how many
-   addresses are classified `Bad` and how many are `Suspect`.
+   addresses are classified `Bad` and how many carry the reason
+   `InsufficientEvidence`.
 2. **Sample the false positives.** Take the `Bad` addresses and check them
    against the host's own traffic. A provider that produces a high share of
    false positives is either misconfigured or not suited to the host's traffic.
 3. **Enforce on `Bad` only.** Apply the host's policy to `Bad` addresses.
-   Leave `Suspect` and `Unknown` alone; they carry no conviction.
+   Leave `Unknown` alone; it carries no conviction.
 4. **Add corroboration.** Enable a second provider. Two independent source
    families are what turn a claim into a conviction, so a second provider
    raises precision at the cost of quota.
@@ -367,6 +433,7 @@ let bots = BadBots::builder().config(config).build()?;
 | `negative_ttl` | 24 h |
 | `failure_ttl` | 5 min |
 | `network_scope_policy` | `CorroborateOnly` |
+| `evidence_policy` | `Strict` |
 | `max_concurrent_verifications` | 4 |
 | `cache_capacity` | 10,000 |
 

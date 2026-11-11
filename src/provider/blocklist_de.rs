@@ -24,7 +24,7 @@ use crate::model::{
 use crate::provider::lookup::{ProviderRuntime, parse_body};
 use crate::provider::services::{SERVICES, assertion_of, category_of};
 use crate::provider::{
-    FeedProvider, FeedSnapshot, LookupProvider, ProviderCapability, ProviderFinding,
+    FeedProvider, FeedSnapshot, LookupProvider, ProviderCapability, ProviderCost, ProviderFinding,
 };
 
 /// The number of attack events an observation needs.
@@ -86,6 +86,10 @@ impl LookupProvider for BlocklistDeQueryProvider {
 
     fn capability(&self) -> ProviderCapability {
         ProviderCapability::Corroborating
+    }
+
+    fn cost(&self) -> ProviderCost {
+        ProviderCost::Low
     }
 
     async fn lookup(&self, ip: IpAddr) -> Result<ProviderFinding, ProviderError> {
@@ -353,5 +357,32 @@ fn observation_for(service: &str, address: IpAddr, now: OffsetDateTime) -> Evide
         observation_window: None,
         count: None,
         upstream_values,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use super::BlocklistDeQueryProvider;
+    use crate::provider::lookup::{ProviderRuntime, daily_guard};
+    use crate::provider::{LookupProvider, ProviderCost};
+
+    #[test]
+    fn the_query_provider_states_its_cost() {
+        let runtime = Arc::new(ProviderRuntime::new(
+            crate::http::build_client(Duration::from_secs(5)).expect("the client is built"),
+            daily_guard(10),
+            Duration::from_secs(5),
+            crate::clock::system_clock(),
+        ));
+        let provider = BlocklistDeQueryProvider::new(
+            "https://api.blocklist.de",
+            Duration::from_secs(48 * 60 * 60),
+            runtime,
+        );
+
+        assert_eq!(provider.cost(), ProviderCost::Low);
     }
 }

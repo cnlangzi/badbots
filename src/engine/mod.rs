@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use time::OffsetDateTime;
 
-use crate::config::{Config, NetworkScopePolicy};
+use crate::config::{Config, EvidencePolicy, NetworkScopePolicy};
 use crate::model::{
     Assertion, Classification, Evidence, EvidenceStrength, IpVerdict, ProviderId, Suppression,
     VerdictInput, VerdictReason,
@@ -18,11 +18,15 @@ use crate::model::{
 
 /// Classifies an evidence set.
 ///
+/// The policy of the configuration decides the evidence bar. The strict policy
+/// convicts on one `Convicting` observation that satisfies the single-source
+/// condition, or on two source families that corroborate each other. The
+/// lenient policy convicts on every valid observation that no provider
+/// withdrew.
+///
 /// The function never fails and never panics. The same arguments always produce
 /// the same verdict.
 pub fn classify(input: &VerdictInput, config: &Config, now: OffsetDateTime) -> IpVerdict {
-    let policy = config.network_scope_policy;
-
     let suppressions = suppressions_by_provider(&input.suppressions);
 
     let (valid, expired): (Vec<&Evidence>, Vec<&Evidence>) = input
@@ -31,16 +35,10 @@ pub fn classify(input: &VerdictInput, config: &Config, now: OffsetDateTime) -> I
         .filter(|evidence| suppressions.get(&evidence.provider) != Some(&Suppression::Safe))
         .partition(|evidence| evidence.is_valid_at(now));
 
-    let single_source = valid.iter().any(|evidence| {
-        suppressions.get(&evidence.provider) != Some(&Suppression::Benign)
-            && convicts_alone(evidence, policy)
-    });
-    let corroborated = count_voting_families(&valid, policy) >= 2;
-
-    let (classification, reason) = if single_source || corroborated {
+    let (classification, reason) = if satisfies_policy(&valid, &suppressions, config) {
         (Classification::Bad, VerdictReason::Convicted)
     } else if !valid.is_empty() {
-        (Classification::Suspect, VerdictReason::EvidencePresent)
+        (Classification::Unknown, VerdictReason::InsufficientEvidence)
     } else if !expired.is_empty() {
         (Classification::Unknown, VerdictReason::EvidenceExpired)
     } else if input.coverage.is_consulted() {
@@ -57,6 +55,30 @@ pub fn classify(input: &VerdictInput, config: &Config, now: OffsetDateTime) -> I
         suppressions: input.suppressions.clone(),
         coverage: input.coverage.clone(),
         assessed_at: now,
+    }
+}
+
+/// Whether the valid observations satisfy the evidence bar of the policy.
+///
+/// A `Safe` suppression is already accounted for: the observations of the
+/// provider that published it never reach the valid set.
+fn satisfies_policy(
+    valid: &[&Evidence],
+    suppressions: &BTreeMap<ProviderId, Suppression>,
+    config: &Config,
+) -> bool {
+    match config.evidence_policy {
+        EvidencePolicy::Strict => {
+            let single_source = valid.iter().any(|evidence| {
+                suppressions.get(&evidence.provider) != Some(&Suppression::Benign)
+                    && convicts_alone(evidence, config.network_scope_policy)
+            });
+            let corroborated = count_voting_families(valid, config.network_scope_policy) >= 2;
+            single_source || corroborated
+        }
+        EvidencePolicy::Lenient => valid
+            .iter()
+            .any(|evidence| suppressions.get(&evidence.provider) != Some(&Suppression::Benign)),
     }
 }
 
@@ -125,7 +147,7 @@ mod tests {
     use time::{Duration, OffsetDateTime};
 
     use super::{classify, count_voting_families};
-    use crate::config::{Config, NetworkScopePolicy};
+    use crate::config::{Config, EvidencePolicy, NetworkScopePolicy};
     use crate::model::{
         Assertion, Classification, Coverage, CoverageLevel, Evidence, EvidenceStrength, IpVerdict,
         MatchScope, ProviderId, SourceFamily, Suppression, ThreatCategory, VerdictInput,
@@ -202,6 +224,38 @@ mod tests {
         }
     }
 
+    /// A configuration with the evidence policy the test asks for.
+    fn policy(policy: EvidencePolicy) -> Config {
+        Config {
+            evidence_policy: policy,
+            ..Config::default()
+        }
+    }
+
+    /// An observation that only signals doubt.
+    fn exact_indicative(provider: &'static str, family: &'static str) -> Evidence {
+        evidence(
+            ProviderId::new(provider),
+            SourceFamily::new(family),
+            Assertion::Attack,
+            EvidenceStrength::Indicative,
+            MatchScope::Exact,
+        )
+    }
+
+    /// A prefix-scoped observation about an attack.
+    fn prefix_attack(provider: &'static str, family: &'static str) -> Evidence {
+        evidence(
+            ProviderId::new(provider),
+            SourceFamily::new(family),
+            Assertion::Attack,
+            EvidenceStrength::Convicting,
+            MatchScope::Prefix {
+                network: "45.32.0.0/16".parse().unwrap(),
+            },
+        )
+    }
+
     /// The number of source families the verdict may convict by.
     fn voting_families(verdict: &IpVerdict, config: &Config) -> usize {
         let evidence: Vec<&Evidence> = verdict.evidence.iter().collect();
@@ -229,8 +283,8 @@ mod tests {
             &Config::default(),
             now(),
         );
-        assert_eq!(verdict.classification, Classification::Suspect);
-        assert_eq!(verdict.reason, VerdictReason::EvidencePresent);
+        assert_eq!(verdict.classification, Classification::Unknown);
+        assert_eq!(verdict.reason, VerdictReason::InsufficientEvidence);
     }
 
     #[test]
@@ -253,25 +307,17 @@ mod tests {
             &Config::default(),
             now(),
         );
-        assert_eq!(verdict.classification, Classification::Suspect);
+        assert_eq!(verdict.classification, Classification::Unknown);
     }
 
     #[test]
     fn a_prefix_attack_observation_never_convicts_alone() {
         let verdict = classify(
-            &input(vec![evidence(
-                ProviderId::new("spamhaus"),
-                SourceFamily::new("spamhaus"),
-                Assertion::Attack,
-                EvidenceStrength::Convicting,
-                MatchScope::Prefix {
-                    network: "45.32.0.0/16".parse().unwrap(),
-                },
-            )]),
+            &input(vec![prefix_attack("spamhaus", "spamhaus")]),
             &Config::default(),
             now(),
         );
-        assert_eq!(verdict.classification, Classification::Suspect);
+        assert_eq!(verdict.classification, Classification::Unknown);
     }
 
     #[test]
@@ -329,8 +375,8 @@ mod tests {
             .suppressions
             .push((ProviderId::new("abuseipdb"), Suppression::Benign));
         let verdict = classify(&input, &config, now());
-        assert_eq!(verdict.classification, Classification::Suspect);
-        assert_eq!(verdict.reason, VerdictReason::EvidencePresent);
+        assert_eq!(verdict.classification, Classification::Unknown);
+        assert_eq!(verdict.reason, VerdictReason::InsufficientEvidence);
         assert_eq!(voting_families(&verdict, &config), 1);
     }
 
@@ -471,7 +517,7 @@ mod tests {
             &Config::default(),
             now(),
         );
-        assert_eq!(verdict.classification, Classification::Suspect);
+        assert_eq!(verdict.classification, Classification::Unknown);
     }
 
     #[test]
@@ -491,5 +537,131 @@ mod tests {
         };
         let verdict = classify(&input(evidence), &config, now());
         assert_eq!(verdict.classification, Classification::Bad);
+    }
+
+    #[test]
+    fn an_indicative_observation_is_insufficient_under_the_strict_policy() {
+        let verdict = classify(
+            &input(vec![exact_indicative("abuseipdb", "abuseipdb")]),
+            &policy(EvidencePolicy::Strict),
+            now(),
+        );
+        assert_eq!(verdict.classification, Classification::Unknown);
+        assert_eq!(verdict.reason, VerdictReason::InsufficientEvidence);
+    }
+
+    #[test]
+    fn an_indicative_observation_convicts_under_the_lenient_policy() {
+        let verdict = classify(
+            &input(vec![exact_indicative("abuseipdb", "abuseipdb")]),
+            &policy(EvidencePolicy::Lenient),
+            now(),
+        );
+        assert_eq!(verdict.classification, Classification::Bad);
+        assert_eq!(verdict.reason, VerdictReason::Convicted);
+    }
+
+    #[test]
+    fn a_prefix_observation_convicts_under_the_lenient_policy() {
+        let verdict = classify(
+            &input(vec![prefix_attack("spamhaus", "spamhaus")]),
+            &policy(EvidencePolicy::Lenient),
+            now(),
+        );
+        assert_eq!(verdict.classification, Classification::Bad);
+        assert_eq!(verdict.reason, VerdictReason::Convicted);
+    }
+
+    #[test]
+    fn the_network_scope_policy_does_not_apply_to_the_lenient_policy() {
+        let evidence = vec![prefix_attack("spamhaus", "spamhaus")];
+
+        let strict = classify(
+            &input(evidence.clone()),
+            &policy(EvidencePolicy::Strict),
+            now(),
+        );
+        assert_eq!(strict.classification, Classification::Unknown);
+        assert_eq!(strict.reason, VerdictReason::InsufficientEvidence);
+
+        let lenient = classify(&input(evidence), &policy(EvidencePolicy::Lenient), now());
+        assert_eq!(lenient.classification, Classification::Bad);
+    }
+
+    #[test]
+    fn the_lenient_policy_accepts_a_prefix_observation_under_every_scope_policy() {
+        for scope in [
+            NetworkScopePolicy::CorroborateOnly,
+            NetworkScopePolicy::Allow,
+        ] {
+            let config = Config {
+                evidence_policy: EvidencePolicy::Lenient,
+                network_scope_policy: scope,
+                ..Config::default()
+            };
+            let verdict = classify(
+                &input(vec![prefix_attack("spamhaus", "spamhaus")]),
+                &config,
+                now(),
+            );
+            assert_eq!(verdict.classification, Classification::Bad);
+        }
+    }
+
+    #[test]
+    fn a_benign_suppression_alone_is_insufficient_under_the_lenient_policy() {
+        let mut input = input(vec![exact_convicting("abuseipdb", "abuseipdb")]);
+        input
+            .suppressions
+            .push((ProviderId::new("abuseipdb"), Suppression::Benign));
+
+        let verdict = classify(&input, &policy(EvidencePolicy::Lenient), now());
+        assert_eq!(verdict.classification, Classification::Unknown);
+        assert_eq!(verdict.reason, VerdictReason::InsufficientEvidence);
+    }
+
+    #[test]
+    fn a_benign_suppression_coexists_with_another_family_under_the_lenient_policy() {
+        let mut input = input(vec![
+            exact_convicting("abuseipdb", "abuseipdb"),
+            exact_convicting("crowdsec", "crowdsec"),
+        ]);
+        input
+            .suppressions
+            .push((ProviderId::new("abuseipdb"), Suppression::Benign));
+
+        let verdict = classify(&input, &policy(EvidencePolicy::Lenient), now());
+        assert_eq!(verdict.classification, Classification::Bad);
+        assert_eq!(verdict.reason, VerdictReason::Convicted);
+    }
+
+    #[test]
+    fn a_safe_suppression_voids_the_evidence_under_the_lenient_policy() {
+        let mut input = input(vec![exact_convicting("abuseipdb", "abuseipdb")]);
+        input
+            .suppressions
+            .push((ProviderId::new("abuseipdb"), Suppression::Safe));
+        input
+            .coverage
+            .record_success(ProviderId::new("abuseipdb"), CoverageLevel::Definitive);
+
+        let verdict = classify(&input, &policy(EvidencePolicy::Lenient), now());
+        assert_eq!(verdict.classification, Classification::Unknown);
+        assert_eq!(verdict.reason, VerdictReason::NoEvidence);
+        assert!(verdict.evidence.is_empty());
+    }
+
+    #[test]
+    fn expired_evidence_contributes_nothing_under_the_lenient_policy() {
+        let mut expired = exact_indicative("abuseipdb", "abuseipdb");
+        expired.expires_at = Some(now() - Duration::hours(1));
+
+        let verdict = classify(
+            &input(vec![expired]),
+            &policy(EvidencePolicy::Lenient),
+            now(),
+        );
+        assert_eq!(verdict.classification, Classification::Unknown);
+        assert_eq!(verdict.reason, VerdictReason::EvidenceExpired);
     }
 }

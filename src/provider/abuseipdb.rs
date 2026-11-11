@@ -19,7 +19,7 @@ use crate::model::{
     ThreatCategory,
 };
 use crate::provider::lookup::{ProviderRuntime, parse_body};
-use crate::provider::{LookupProvider, ProviderCapability, ProviderFinding};
+use crate::provider::{LookupProvider, ProviderCapability, ProviderCost, ProviderFinding};
 use crate::secret::ApiKey;
 
 /// The number of days a positive result stays usable.
@@ -104,6 +104,10 @@ impl LookupProvider for AbuseIpdbProvider {
         ProviderCapability::Primary
     }
 
+    fn cost(&self) -> ProviderCost {
+        ProviderCost::Medium
+    }
+
     async fn lookup(&self, ip: IpAddr) -> Result<ProviderFinding, ProviderError> {
         let now = self.runtime.clock().now();
         let url = format!("{}/check", self.base_url.trim_end_matches('/'));
@@ -145,13 +149,31 @@ impl LookupProvider for AbuseIpdbProvider {
             .flat_map(|report| report.categories.iter().flatten().copied())
             .collect();
 
-        let inbound: Vec<(u32, Assertion, ThreatCategory)> = category_ids
+        let mapped: Vec<(u32, Assertion, ThreatCategory)> = category_ids
             .iter()
             .filter_map(|id| {
                 category_of(*id).map(|(assertion, category)| (*id, assertion, category))
             })
-            .filter(|(_, assertion, _)| assertion.is_inbound_attack())
             .collect();
+
+        let claimed = mapped
+            .iter()
+            .find(|(_, assertion, _)| assertion.is_inbound_attack())
+            .or_else(|| {
+                mapped
+                    .iter()
+                    .find(|(_, assertion, _)| *assertion == Assertion::Reconnaissance)
+            })
+            .or_else(|| {
+                mapped
+                    .iter()
+                    .find(|(_, assertion, _)| *assertion == Assertion::Abuse)
+            })
+            .copied();
+
+        let has_inbound_category = claimed
+            .as_ref()
+            .is_some_and(|(_, assertion, _)| assertion.is_inbound_attack());
 
         let last_reported_at = data.last_reported_at.as_deref().and_then(parse_timestamp);
         let report_within_window = match last_reported_at {
@@ -194,21 +216,22 @@ impl LookupProvider for AbuseIpdbProvider {
             upstream_values.insert("is_tor".to_string(), is_tor.to_string());
         }
 
-        let strength = rules::abuseipdb::strength(
+        let strength = rules::abuseipdb::conviction(
             score,
             distinct_users,
-            !inbound.is_empty(),
+            has_inbound_category,
             report_within_window,
-        );
+        )
+        .or_else(|| rules::abuseipdb::observation(score, distinct_users));
 
-        let Some(strength) = strength else {
+        let (Some(strength), Some((upstream_category, assertion, category))) = (strength, claimed)
+        else {
             return Ok(ProviderFinding::empty(
                 ProviderId::ABUSEIPDB,
                 CoverageLevel::Definitive,
             ));
         };
 
-        let (_, assertion, category) = inbound[0];
         let expires_at = last_reported_at
             .map(|reported| reported + Duration::days(VALIDITY_DAYS))
             .unwrap_or(now + Duration::days(VALIDITY_DAYS));
@@ -218,7 +241,7 @@ impl LookupProvider for AbuseIpdbProvider {
             family: SourceFamily::ABUSEIPDB,
             assertion,
             category,
-            upstream_category: inbound.first().map(|(id, _, _)| id.to_string()),
+            upstream_category: Some(upstream_category.to_string()),
             strength,
             scope: MatchScope::Exact,
             observed_at: last_reported_at,
@@ -287,8 +310,32 @@ struct Report {
 
 #[cfg(test)]
 mod tests {
-    use super::{INBOUND_ATTACK_CATEGORIES, category_of};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use super::{AbuseIpdbProvider, INBOUND_ATTACK_CATEGORIES, category_of};
     use crate::model::{Assertion, ThreatCategory};
+    use crate::provider::lookup::{ProviderRuntime, daily_guard};
+    use crate::provider::{LookupProvider, ProviderCost};
+    use crate::secret::ApiKey;
+
+    #[test]
+    fn the_provider_states_its_cost() {
+        let runtime = Arc::new(ProviderRuntime::new(
+            crate::http::build_client(Duration::from_secs(5)).expect("the client is built"),
+            daily_guard(10),
+            Duration::from_secs(5),
+            crate::clock::system_clock(),
+        ));
+        let provider = AbuseIpdbProvider::new(
+            ApiKey::new("test-key"),
+            "https://api.abuseipdb.com/api/v2",
+            30,
+            runtime,
+        );
+
+        assert_eq!(provider.cost(), ProviderCost::Medium);
+    }
 
     #[test]
     fn the_inbound_attack_categories_are_mapped() {

@@ -2,8 +2,9 @@
 
 The Spamhaus DROP provider reads the networks that professional spam and
 cyber-crime operations lease or steal. The publisher states this about a
-range, never about a single address, so an observation from this provider may
-only corroborate the observation of another source family.
+range, never about a single address, so under the strict policy an observation
+from this provider may only corroborate the observation of another source
+family.
 
 ## Setup
 
@@ -11,7 +12,7 @@ only corroborate the observation of another source family.
 
    ```toml
    [dependencies]
-   badbots = { version = "0.1", features = ["spamhaus"] }
+   badbots = { version = "0.2", features = ["spamhaus"] }
    ```
 
 2. Enable the provider:
@@ -92,14 +93,17 @@ remove ranges that turned out to be legitimate, and whole-range listings have
 produced collateral damage for hosting customers.
 
 This library therefore never convicts an address on the strength of this
-provider alone:
+provider alone under the strict policy:
 
-| Situation | Effect |
-|---|---|
-| A DROP hit without any other evidence | A `Suspect` verdict |
-| A DROP hit together with an attack observation of an exact address from another source family | A `Bad` verdict |
+| Situation | Strict policy | Lenient policy |
+|---|---|---|
+| A DROP hit without any other evidence | A `Unknown` verdict with the reason `InsufficientEvidence`, and never a vote | A `Bad` verdict |
+| A DROP hit together with an attack observation of an exact address from another source family | A `Bad` verdict | A `Bad` verdict |
 
-The observation is prefix-scoped, so it never satisfies the single-source
-conviction path. `Config::network_scope_policy` may be set to
+The observation is prefix-scoped, so under the strict policy it never satisfies
+the single-source conviction path. `Config::network_scope_policy` may be set to
 `NetworkScopePolicy::Allow` to let prefix-scoped observations satisfy it, and
-the same collateral damage applies to a host that does.
+the same collateral damage applies to a host that does. The knob governs the
+strict policy only: the lenient policy counts a range-wide observation, because
+it is chosen deliberately by a host that has already reached its own
+conclusion.

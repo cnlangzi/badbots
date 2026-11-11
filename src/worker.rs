@@ -17,6 +17,7 @@ use time::OffsetDateTime;
 use tokio::sync::{mpsc, watch};
 
 use crate::Shared;
+use crate::config::EvidencePolicy;
 use crate::lock;
 use crate::model::{IpVerdict, VerdictInput};
 use crate::provider::{LookupProvider, ProviderFinding};
@@ -280,11 +281,13 @@ fn forget_running(shared: &Shared, ip: IpAddr, verification: &Arc<Verification>)
 
 /// Asks the providers about an address and returns the assessment they produce.
 ///
-/// The providers are asked in the order that spends the least quota: the loaded
-/// lists are merged first, because they are local and free, then the Primary
-/// providers one at a time, because a Primary provider may convict on its own,
-/// and finally the providers that cannot convict on their own, because asking
-/// them one at a time would only add latency.
+/// The providers are asked in the order the policy prescribes. The loaded lists
+/// are merged first under either policy, because they are local and free. The
+/// strict policy then asks the Primary providers one at a time, because a
+/// Primary provider may convict on its own, and finally the providers that
+/// cannot convict on their own, because asking them one at a time would only
+/// add latency. The lenient policy asks every provider from the cheapest to the
+/// most expensive one, one at a time, and stops at the first one that hits.
 ///
 /// The assessment of the local state reads the answers in the same order and
 /// stops at the same point, so that the coverage of the two is the same.
@@ -300,18 +303,29 @@ async fn assess(shared: &Arc<Shared>, ip: IpAddr) -> IpVerdict {
     }
 
     shared.merge_feeds(&mut input);
-    if shared.is_convicted(&input, now) {
+    if shared.is_bad(&input, now) {
         return crate::classify(&input, &shared.config, now);
     }
 
-    for provider in shared.primary_providers() {
+    let lenient = shared.config.evidence_policy == EvidencePolicy::Lenient;
+    let providers: Vec<&Arc<dyn LookupProvider>> = if lenient {
+        shared.ordered_providers()
+    } else {
+        shared.primary_providers().collect()
+    };
+
+    for provider in providers {
         match ask(shared, provider, ip, now).await {
             Ok(finding) => shared.merge(&mut input, provider.as_ref(), &finding),
             Err(error) => input.coverage.record_failure(provider.id(), error),
         }
-        if shared.is_convicted(&input, now) {
+        if shared.is_bad(&input, now) {
             return crate::classify(&input, &shared.config, now);
         }
+    }
+
+    if lenient {
+        return crate::classify(&input, &shared.config, now);
     }
 
     let corroborating: Vec<_> = shared.corroborating_providers().collect();

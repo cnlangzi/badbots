@@ -37,6 +37,24 @@ pub enum ProviderCapability {
     ContextOnly,
 }
 
+/// How expensive a lookup of a provider is.
+///
+/// The classes are ordered from the cheapest to the most expensive one. The
+/// lenient policy asks the providers in that order and stops at the first hit,
+/// so a provider states its own price.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderCost {
+    /// The lookup costs nothing.
+    Free,
+    /// The lookup is cheap.
+    Low,
+    /// The lookup costs a moderate amount.
+    Medium,
+    /// The lookup is expensive.
+    High,
+}
+
 /// The health of one provider between lookups.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct ProviderHealth {
@@ -119,6 +137,14 @@ pub trait LookupProvider: Send + Sync {
     fn family(&self) -> SourceFamily;
     /// What the provider is allowed to do with its observations.
     fn capability(&self) -> ProviderCapability;
+    /// How expensive a lookup of the provider is.
+    ///
+    /// The lenient policy consults the providers from the cheapest to the most
+    /// expensive one and stops at the first hit, so the price of a provider
+    /// decides where it is asked. The method has no default, because a provider
+    /// that silently inherited a price class would sit in the wrong position of
+    /// the order without anyone noticing.
+    fn cost(&self) -> ProviderCost;
     /// Looks the address up.
     async fn lookup(&self, ip: IpAddr) -> Result<ProviderFinding, ProviderError>;
 }
@@ -138,6 +164,10 @@ impl<T: LookupProvider + ?Sized> LookupProvider for Arc<T> {
 
     fn capability(&self) -> ProviderCapability {
         (**self).capability()
+    }
+
+    fn cost(&self) -> ProviderCost {
+        (**self).cost()
     }
 
     async fn lookup(&self, ip: IpAddr) -> Result<ProviderFinding, ProviderError> {
@@ -233,4 +263,47 @@ pub struct ProviderStatus {
     pub published_at: Option<OffsetDateTime>,
     /// The earliest instant at which the list may be fetched again.
     pub next_refresh_at: Option<OffsetDateTime>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::IpAddr;
+    use std::sync::Arc;
+
+    use super::{LookupProvider, ProviderCapability, ProviderCost, ProviderFinding};
+    use crate::error::ProviderError;
+    use crate::model::{CoverageLevel, ProviderId, SourceFamily};
+
+    /// A provider that states its own price.
+    struct Priced;
+
+    #[async_trait::async_trait]
+    impl LookupProvider for Priced {
+        fn id(&self) -> ProviderId {
+            ProviderId::new("priced")
+        }
+
+        fn family(&self) -> SourceFamily {
+            SourceFamily::new("priced")
+        }
+
+        fn capability(&self) -> ProviderCapability {
+            ProviderCapability::Corroborating
+        }
+
+        fn cost(&self) -> ProviderCost {
+            ProviderCost::High
+        }
+
+        async fn lookup(&self, _ip: IpAddr) -> Result<ProviderFinding, ProviderError> {
+            Ok(ProviderFinding::empty(self.id(), CoverageLevel::Partial))
+        }
+    }
+
+    #[test]
+    fn a_shared_handle_forwards_the_cost_of_the_provider() {
+        let provider: Arc<dyn LookupProvider> = Arc::new(Priced);
+
+        assert_eq!(provider.cost(), ProviderCost::High);
+    }
 }
