@@ -1,6 +1,7 @@
 //! The provider interfaces and the values they produce.
 
 use std::net::IpAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -47,10 +48,17 @@ pub struct ProviderHealth {
     pub last_error: Option<ProviderError>,
 }
 
-/// The answer of a lookup provider about one address.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct ProviderVerdict {
+/// What a lookup provider found about one address.
+///
+/// A finding is a statement of a provider, not a conclusion about the address.
+/// The engine derives the conclusion from the findings of every provider.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct ProviderFinding {
     /// The provider that answered.
+    ///
+    /// The engine takes the identity of a provider from the provider itself,
+    /// so this field is informational: it names the provider that produced the
+    /// finding, and it is never trusted.
     pub provider: ProviderId,
     /// How strongly the provider stated its answer.
     pub coverage: CoverageLevel,
@@ -62,8 +70,8 @@ pub struct ProviderVerdict {
     pub expires_at: Option<OffsetDateTime>,
 }
 
-impl ProviderVerdict {
-    /// Creates a verdict without evidence and without suppression.
+impl ProviderFinding {
+    /// Creates a finding without evidence and without suppression.
     pub fn empty(provider: ProviderId, coverage: CoverageLevel) -> Self {
         Self {
             provider,
@@ -112,7 +120,29 @@ pub trait LookupProvider: Send + Sync {
     /// What the provider is allowed to do with its observations.
     fn capability(&self) -> ProviderCapability;
     /// Looks the address up.
-    async fn lookup(&self, ip: IpAddr) -> Result<ProviderVerdict, ProviderError>;
+    async fn lookup(&self, ip: IpAddr) -> Result<ProviderFinding, ProviderError>;
+}
+
+/// A lookup provider behind a shared handle.
+///
+/// A registered provider may be handed over as a shared handle.
+#[async_trait]
+impl<T: LookupProvider + ?Sized> LookupProvider for Arc<T> {
+    fn id(&self) -> ProviderId {
+        (**self).id()
+    }
+
+    fn family(&self) -> SourceFamily {
+        (**self).family()
+    }
+
+    fn capability(&self) -> ProviderCapability {
+        (**self).capability()
+    }
+
+    async fn lookup(&self, ip: IpAddr) -> Result<ProviderFinding, ProviderError> {
+        (**self).lookup(ip).await
+    }
 }
 
 /// A provider that publishes a list of addresses.
@@ -134,13 +164,39 @@ pub trait FeedProvider: Send + Sync {
     async fn fetch(&self) -> Result<FeedSnapshot, ProviderError>;
 }
 
+/// A feed provider behind a shared handle.
+///
+/// A registered provider may be handed over as a shared handle.
+#[async_trait]
+impl<T: FeedProvider + ?Sized> FeedProvider for Arc<T> {
+    fn id(&self) -> ProviderId {
+        (**self).id()
+    }
+
+    fn family(&self) -> SourceFamily {
+        (**self).family()
+    }
+
+    fn capability(&self) -> ProviderCapability {
+        (**self).capability()
+    }
+
+    fn min_refresh_interval(&self) -> Duration {
+        (**self).min_refresh_interval()
+    }
+
+    async fn fetch(&self) -> Result<FeedSnapshot, ProviderError> {
+        (**self).fetch().await
+    }
+}
+
 /// The outcome of one provider lookup.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ProviderOutcome {
     /// The provider that was asked.
     pub provider: ProviderId,
     /// The answer, or the reason there is none.
-    pub result: Result<ProviderVerdict, ProviderError>,
+    pub result: Result<ProviderFinding, ProviderError>,
 }
 
 /// The report of one enrichment run.
@@ -187,10 +243,10 @@ pub struct ProviderStatus {
     pub last_attempt: Option<OffsetDateTime>,
     /// The last failure.
     pub last_error: Option<ProviderError>,
-    /// The number of lookups spent in the current budget window.
-    pub budget_used: Option<u32>,
-    /// The budget of the current window.
-    pub budget_limit: Option<u32>,
+    /// The number of lookups spent in the current quota window.
+    pub quota_used: Option<u32>,
+    /// The quota of the current window.
+    pub quota_limit: Option<u32>,
     /// The number of entries of the loaded list.
     pub entries: Option<u32>,
     /// The publication time of the loaded list.

@@ -15,7 +15,7 @@ use badbots::model::{Evidence, EvidenceStrength};
 use badbots::provider::{FeedProvider, FeedSnapshot, ProviderCapability, ProviderStatus};
 use badbots::{
     BadBots, BlocklistDeConfig, Classification, Config, DShieldConfig, MatchScope, ProviderError,
-    ProviderId, SourceFamily, SpamhausConfig, VerdictReason,
+    ProviderId, ProviderRuntime, SourceFamily, SpamhausConfig, VerdictReason, daily_guard,
 };
 use common::{TestClock, fixture};
 use time::{OffsetDateTime, macros::datetime};
@@ -88,6 +88,13 @@ impl FeedProvider for ScriptedProvider {
             Err(error) => Err(error.clone()),
         }
     }
+}
+
+/// The factory that registers a scripted provider with the library.
+fn scripted(
+    provider: Arc<ScriptedProvider>,
+) -> impl FnOnce(Arc<ProviderRuntime>) -> Arc<ScriptedProvider> + Send {
+    move |_| provider.clone()
 }
 
 /// One observation of a scripted snapshot.
@@ -224,7 +231,7 @@ async fn a_refresh_inside_the_minimum_interval_is_skipped() {
     let provider =
         ScriptedProvider::with_interval(vec![Ok(snapshot("a"))], Duration::from_secs(60 * 60));
     let bots = BadBots::builder()
-        .feed_provider(provider.clone())
+        .feed_provider(daily_guard(100), scripted(provider.clone()))
         .clock(Arc::new(TestClock::new(now())))
         .build()
         .expect("the library is built");
@@ -250,7 +257,7 @@ async fn the_interval_applies_to_a_failed_refresh_as_well() {
         Duration::from_secs(60 * 60),
     );
     let bots = BadBots::builder()
-        .feed_provider(provider.clone())
+        .feed_provider(daily_guard(100), scripted(provider.clone()))
         .clock(Arc::new(TestClock::new(now())))
         .build()
         .expect("the library is built");
@@ -275,7 +282,7 @@ async fn the_status_survives_an_interval_that_is_out_of_range() {
     let provider =
         ScriptedProvider::with_interval(vec![Ok(snapshot("a"))], Duration::from_secs(u64::MAX));
     let bots = BadBots::builder()
-        .feed_provider(provider.clone())
+        .feed_provider(daily_guard(100), scripted(provider.clone()))
         .clock(Arc::new(TestClock::new(now())))
         .build()
         .expect("the library is built");
@@ -290,7 +297,7 @@ async fn the_status_survives_an_interval_that_is_out_of_range() {
 async fn the_attribution_of_a_loaded_list_is_reachable() {
     let provider = ScriptedProvider::new(vec![Ok(snapshot("a"))]);
     let bots = BadBots::builder()
-        .feed_provider(provider.clone())
+        .feed_provider(daily_guard(100), scripted(provider.clone()))
         .clock(Arc::new(TestClock::new(now())))
         .build()
         .expect("the library is built");
@@ -311,7 +318,7 @@ async fn the_attribution_of_a_loaded_list_is_reachable() {
 async fn a_replaced_list_is_never_seen_half_parsed() {
     let provider = ScriptedProvider::new(vec![Ok(snapshot("a")), Ok(snapshot("b"))]);
     let bots = BadBots::builder()
-        .feed_provider(provider.clone())
+        .feed_provider(daily_guard(100), scripted(provider.clone()))
         .clock(Arc::new(TestClock::new(now())))
         .build()
         .expect("the library is built");
@@ -365,7 +372,7 @@ async fn a_replaced_list_is_never_seen_half_parsed() {
 async fn a_list_that_is_replaced_releases_the_previous_one() {
     let provider = ScriptedProvider::new(vec![Ok(snapshot("a")), Ok(snapshot("b"))]);
     let bots = BadBots::builder()
-        .feed_provider(provider.clone())
+        .feed_provider(daily_guard(100), scripted(provider.clone()))
         .clock(Arc::new(TestClock::new(now())))
         .build()
         .expect("the library is built");

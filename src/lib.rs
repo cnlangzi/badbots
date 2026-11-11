@@ -54,10 +54,12 @@ pub use model::{
     RequestVerdict, SourceFamily, Suppression, ThreatCategory, UaState, UserAgentMarkers,
     VerdictInput, VerdictReason,
 };
+pub use provider::lookup::{ProviderRuntime, daily_guard, monthly_guard};
 pub use provider::{
     EnrichmentReport, FeedProvider, FeedRefreshReport, FeedRefreshResult, FeedSnapshot,
-    LookupProvider, ProviderCapability, ProviderOutcome, ProviderStatus, ProviderVerdict,
+    LookupProvider, ProviderCapability, ProviderFinding, ProviderOutcome, ProviderStatus,
 };
+pub use quota::{QuotaGuard, QuotaWindow};
 pub use secret::ApiKey;
 
 use std::collections::HashMap;
@@ -72,7 +74,6 @@ use tokio::sync::Semaphore;
 use crate::cache::{CacheEntry, CacheKey, CacheValue, TtlCache};
 use crate::model::{is_assessable, normalize};
 use crate::provider::ProviderHealth;
-use crate::provider::lookup::ProviderRuntime;
 
 /// The environment variable that carries the AbuseIPDB API key.
 pub const ABUSEIPDB_API_KEY_ENV: &str = "BADBOTS_ABUSEIPDB_API_KEY";
@@ -84,8 +85,9 @@ struct Inner {
     config: Config,
     providers: Vec<Arc<dyn LookupProvider>>,
     feed_providers: Vec<Arc<dyn FeedProvider>>,
-    runtimes: HashMap<ProviderId, Arc<ProviderRuntime>>,
-    cache: TtlCache<ProviderVerdict>,
+    lookup_runtimes: HashMap<ProviderId, Arc<ProviderRuntime>>,
+    feed_runtimes: HashMap<ProviderId, Arc<ProviderRuntime>>,
+    cache: TtlCache<ProviderFinding>,
     health: Mutex<HashMap<ProviderId, ProviderHealth>>,
     refreshes: Mutex<HashMap<ProviderId, OffsetDateTime>>,
     feeds: RwLock<Arc<LoadedFeeds>>,
@@ -335,7 +337,10 @@ impl BadBots {
             .unwrap_or_default()
     }
 
-    /// The health of every configured provider.
+    /// The health of every provider the library consults.
+    ///
+    /// A provider the host registered is reported as well, whether the
+    /// configuration declares it or not.
     pub fn provider_status(&self) -> Vec<ProviderStatus> {
         let now = self.inner.clock.now();
         let health = match self.inner.health.lock() {
@@ -344,8 +349,16 @@ impl BadBots {
         };
 
         let mut statuses = Vec::new();
+        let registered: Vec<ProviderId> = self
+            .inner
+            .providers
+            .iter()
+            .map(|provider| provider.id())
+            .collect();
 
-        if let Some(provider) = &self.inner.config.providers.abuseipdb {
+        if let Some(provider) = &self.inner.config.providers.abuseipdb
+            && !registered.contains(&ProviderId::ABUSEIPDB)
+        {
             statuses.push(self.status_of(
                 ProviderId::ABUSEIPDB,
                 SourceFamily::ABUSEIPDB,
@@ -356,7 +369,9 @@ impl BadBots {
             ));
         }
 
-        if let Some(provider) = &self.inner.config.providers.crowdsec {
+        if let Some(provider) = &self.inner.config.providers.crowdsec
+            && !registered.contains(&ProviderId::CROWDSEC)
+        {
             statuses.push(self.status_of(
                 ProviderId::CROWDSEC,
                 SourceFamily::CROWDSEC,
@@ -369,6 +384,7 @@ impl BadBots {
 
         if let Some(provider) = &self.inner.config.providers.blocklist_de
             && provider.use_per_address_query
+            && !registered.contains(&ProviderId::BLOCKLIST_DE)
         {
             statuses.push(self.status_of(
                 ProviderId::BLOCKLIST_DE,
@@ -376,6 +392,17 @@ impl BadBots {
                 ProviderCapability::Corroborating,
                 provider.enabled,
                 health.get(&ProviderId::BLOCKLIST_DE),
+                now,
+            ));
+        }
+
+        for provider in &self.inner.providers {
+            statuses.push(self.status_of(
+                provider.id(),
+                provider.family(),
+                provider.capability(),
+                true,
+                health.get(&provider.id()),
                 now,
             ));
         }
@@ -449,7 +476,7 @@ impl BadBots {
         health: Option<&ProviderHealth>,
         now: OffsetDateTime,
     ) -> ProviderStatus {
-        let runtime = self.inner.runtimes.get(&provider);
+        let runtime = self.inner.lookup_runtimes.get(&provider);
         ProviderStatus {
             provider,
             family,
@@ -458,8 +485,8 @@ impl BadBots {
             last_success: health.and_then(|health| health.last_success),
             last_attempt: health.and_then(|health| health.last_attempt),
             last_error: health.and_then(|health| health.last_error.clone()),
-            budget_used: runtime.map(|runtime| runtime.quota().used(now)),
-            budget_limit: runtime.map(|runtime| runtime.quota().limit()),
+            quota_used: runtime.map(|runtime| runtime.quota().used(now)),
+            quota_limit: runtime.and_then(|runtime| runtime.quota().bounded_limit()),
             entries: None,
             published_at: None,
             next_refresh_at: None,
@@ -475,7 +502,7 @@ impl BadBots {
         health: Option<&ProviderHealth>,
         now: OffsetDateTime,
     ) -> ProviderStatus {
-        let runtime = self.inner.runtimes.get(&provider);
+        let runtime = self.inner.feed_runtimes.get(&provider);
         let feeds = self.loaded_feeds();
         let feed = feeds.get(&provider);
         let next_refresh_at = self.next_refresh_at(&provider);
@@ -488,8 +515,8 @@ impl BadBots {
             last_success: health.and_then(|health| health.last_success),
             last_attempt: health.and_then(|health| health.last_attempt),
             last_error: health.and_then(|health| health.last_error.clone()),
-            budget_used: runtime.map(|runtime| runtime.quota().used(now)),
-            budget_limit: runtime.map(|runtime| runtime.quota().limit()),
+            quota_used: runtime.map(|runtime| runtime.quota().used(now)),
+            quota_limit: runtime.and_then(|runtime| runtime.quota().bounded_limit()),
             entries: feed
                 .map(|feed| u32::try_from(feed.snapshot.entries.len()).unwrap_or(u32::MAX)),
             published_at: feed.and_then(|feed| feed.snapshot.published_at),
@@ -540,13 +567,17 @@ impl BadBots {
         *feeds = Arc::new(registry);
     }
 
+    /// Adds the findings of a provider to the evidence.
+    ///
+    /// The identity of the provider is taken from the provider itself, not from
+    /// the finding, so a finding cannot claim the identity of another provider.
     fn merge(
         &self,
         input: &mut VerdictInput,
         provider: &dyn LookupProvider,
-        verdict: &ProviderVerdict,
+        finding: &ProviderFinding,
     ) {
-        for evidence in &verdict.evidence {
+        for evidence in &finding.evidence {
             let mut evidence = evidence.clone();
             match provider.capability() {
                 ProviderCapability::Primary => {}
@@ -561,12 +592,12 @@ impl BadBots {
             evidence.provider = provider.id();
             input.evidence.push(evidence);
         }
-        if let Some(suppression) = verdict.suppression {
+        if let Some(suppression) = finding.suppression {
             input.suppressions.push((provider.id(), suppression));
         }
         input
             .coverage
-            .record_success(verdict.provider.clone(), verdict.coverage);
+            .record_success(provider.id(), finding.coverage);
     }
 
     /// Adds the observations of the loaded feeds.
@@ -682,7 +713,20 @@ pub struct BadBotsBuilder {
     client: Option<reqwest::Client>,
     clock: Option<Arc<dyn Clock>>,
     markers: Option<UserAgentMarkers>,
-    feed_providers: Vec<Arc<dyn FeedProvider>>,
+    lookup_registrations: Vec<LookupRegistration>,
+    feed_registrations: Vec<FeedRegistration>,
+}
+
+/// A lookup provider the host registered and the factory that builds it.
+struct LookupRegistration {
+    quota: QuotaGuard,
+    factory: Box<dyn FnOnce(Arc<ProviderRuntime>) -> Arc<dyn LookupProvider> + Send>,
+}
+
+/// A feed provider the host registered and the factory that builds it.
+struct FeedRegistration {
+    quota: QuotaGuard,
+    factory: Box<dyn FnOnce(Arc<ProviderRuntime>) -> Arc<dyn FeedProvider> + Send>,
 }
 
 impl BadBotsBuilder {
@@ -830,9 +874,96 @@ impl BadBotsBuilder {
         self
     }
 
-    /// Adds a provider that publishes a list of addresses.
-    pub fn feed_provider(mut self, provider: Arc<dyn FeedProvider>) -> Self {
-        self.feed_providers.push(provider);
+    /// Registers a provider that is asked about one address at a time.
+    ///
+    /// The library builds the provider while it builds the library and hands it
+    /// the runtime the provider performs its requests in: the HTTP client the
+    /// host configured, the clock the host injected, the configured request
+    /// timeout and the quota of the registration. A provider that brought its
+    /// own runtime would answer with another clock and would not spend the
+    /// quota the status reports.
+    ///
+    /// The identifier of the provider has to be unique, because the answers of
+    /// a provider are cached under its identifier. A build with two providers
+    /// of the same identifier fails with [`ConfigError::Invalid`].
+    ///
+    /// ```
+    /// use std::net::IpAddr;
+    /// use std::sync::Arc;
+    ///
+    /// use async_trait::async_trait;
+    /// use badbots::provider::{LookupProvider, ProviderCapability, ProviderFinding};
+    /// use badbots::{
+    ///     BadBots, Config, CoverageLevel, ProviderError, ProviderId, ProviderRuntime,
+    ///     SourceFamily, daily_guard,
+    /// };
+    ///
+    /// struct InternalProvider {
+    ///     runtime: Arc<ProviderRuntime>,
+    /// }
+    ///
+    /// #[async_trait]
+    /// impl LookupProvider for InternalProvider {
+    ///     fn id(&self) -> ProviderId {
+    ///         ProviderId::new("internal")
+    ///     }
+    ///
+    ///     fn family(&self) -> SourceFamily {
+    ///         SourceFamily::new("internal")
+    ///     }
+    ///
+    ///     fn capability(&self) -> ProviderCapability {
+    ///         ProviderCapability::Corroborating
+    ///     }
+    ///
+    ///     async fn lookup(&self, ip: IpAddr) -> Result<ProviderFinding, ProviderError> {
+    ///         let now = self.runtime.clock().now();
+    ///         let request = self.runtime.client().get("https://intel.internal/v1");
+    ///         let response = self.runtime.send(request, now).await?;
+    ///         let _body = self.runtime.read_body(response).await?;
+    ///         Ok(ProviderFinding::empty(self.id(), CoverageLevel::Partial))
+    ///     }
+    /// }
+    ///
+    /// let bots = BadBots::builder()
+    ///     .config(Config::default())
+    ///     .lookup_provider(daily_guard(500), |runtime| {
+    ///         Arc::new(InternalProvider { runtime })
+    ///     })
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn lookup_provider<P, F>(mut self, quota: QuotaGuard, factory: F) -> Self
+    where
+        P: LookupProvider + 'static,
+        F: FnOnce(Arc<ProviderRuntime>) -> P + Send + 'static,
+    {
+        self.lookup_registrations.push(LookupRegistration {
+            quota,
+            factory: Box::new(move |runtime| -> Arc<dyn LookupProvider> {
+                Arc::new(factory(runtime))
+            }),
+        });
+        self
+    }
+
+    /// Registers a provider that publishes a list of addresses.
+    ///
+    /// The provider is handed the same runtime as a lookup provider, so it
+    /// spends the quota of the registration and uses the client and the clock
+    /// of the host. A registered provider replaces a provider of the same
+    /// identifier that the configuration asks for.
+    pub fn feed_provider<P, F>(mut self, quota: QuotaGuard, factory: F) -> Self
+    where
+        P: FeedProvider + 'static,
+        F: FnOnce(Arc<ProviderRuntime>) -> P + Send + 'static,
+    {
+        self.feed_registrations.push(FeedRegistration {
+            quota,
+            factory: Box::new(move |runtime| -> Arc<dyn FeedProvider> {
+                Arc::new(factory(runtime))
+            }),
+        });
         self
     }
 
@@ -886,16 +1017,46 @@ impl BadBotsBuilder {
         let clock = self.clock.unwrap_or_else(clock::system_clock);
         let registered = registered_providers(&config, &client, &clock)?;
         let mut providers: Vec<Arc<dyn LookupProvider>> = Vec::with_capacity(registered.len());
-        let mut runtimes: HashMap<ProviderId, Arc<ProviderRuntime>> = HashMap::new();
+        let mut lookup_runtimes: HashMap<ProviderId, Arc<ProviderRuntime>> = HashMap::new();
+        let mut ids: Vec<ProviderId> = Vec::with_capacity(registered.len());
         for entry in registered {
-            runtimes.insert(entry.provider.id(), Arc::clone(&entry.runtime));
+            ids.push(entry.provider.id());
+            lookup_runtimes.insert(entry.provider.id(), Arc::clone(&entry.runtime));
             providers.push(entry.provider);
         }
 
-        let mut feed_providers = registered_feed_providers(&config, &client, &clock, &mut runtimes);
-        for provider in self.feed_providers {
-            feed_providers.retain(|registered| registered.id() != provider.id());
-            runtimes.remove(&provider.id());
+        for registration in self.lookup_registrations {
+            let runtime = Arc::new(ProviderRuntime::new(
+                client.clone(),
+                registration.quota,
+                config.request_timeout,
+                Arc::clone(&clock),
+            ));
+            let provider = (registration.factory)(Arc::clone(&runtime));
+            let id = provider.id();
+            if ids.contains(&id) {
+                return Err(ConfigError::Invalid(format!("duplicate provider id {id}")));
+            }
+            ids.push(id.clone());
+            lookup_runtimes.insert(id, runtime);
+            providers.push(provider);
+        }
+
+        let mut feed_runtimes: HashMap<ProviderId, Arc<ProviderRuntime>> = HashMap::new();
+        let mut feed_providers =
+            registered_feed_providers(&config, &client, &clock, &mut feed_runtimes);
+        for registration in self.feed_registrations {
+            let runtime = Arc::new(ProviderRuntime::new(
+                client.clone(),
+                registration.quota,
+                config.request_timeout,
+                Arc::clone(&clock),
+            ));
+            let provider = (registration.factory)(Arc::clone(&runtime));
+            let id = provider.id();
+            feed_providers.retain(|registered| registered.id() != id);
+            feed_runtimes.remove(&id);
+            feed_runtimes.insert(id, runtime);
             feed_providers.push(provider);
         }
 
@@ -910,7 +1071,8 @@ impl BadBotsBuilder {
                 config,
                 providers,
                 feed_providers,
-                runtimes,
+                lookup_runtimes,
+                feed_runtimes,
                 health: Mutex::new(HashMap::new()),
                 refreshes: Mutex::new(HashMap::new()),
                 feeds: RwLock::new(Arc::new(LoadedFeeds::default())),
@@ -1221,14 +1383,14 @@ pub(crate) fn bound_expiry(now: OffsetDateTime, ttl: Duration) -> OffsetDateTime
 /// earlier of the expiry the provider declared and the bound for the kind of
 /// result the answer carries. The bound can only make the library ask sooner,
 /// it never keeps a claim alive past the validity the provider stated.
-fn entry_expiry(verdict: &ProviderVerdict, config: &Config, now: OffsetDateTime) -> OffsetDateTime {
-    let ttl = if verdict.evidence.is_empty() {
+fn entry_expiry(finding: &ProviderFinding, config: &Config, now: OffsetDateTime) -> OffsetDateTime {
+    let ttl = if finding.evidence.is_empty() {
         config.negative_ttl
     } else {
         config.positive_ttl
     };
     let bound = bound_expiry(now, ttl);
-    match verdict.expires_at {
+    match finding.expires_at {
         Some(declared) => declared.min(bound),
         None => bound,
     }

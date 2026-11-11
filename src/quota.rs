@@ -22,6 +22,7 @@ pub enum QuotaWindow {
 pub struct QuotaGuard {
     limit: u32,
     window: QuotaWindow,
+    unlimited: bool,
     state: Mutex<QuotaState>,
 }
 
@@ -37,6 +38,23 @@ impl QuotaGuard {
         Self {
             limit,
             window,
+            unlimited: false,
+            state: Mutex::new(QuotaState {
+                used: 0,
+                period: (0, 0, 0),
+            }),
+        }
+    }
+
+    /// Creates a guard that never refuses a request.
+    ///
+    /// The guard is used by a provider whose upstream does not count the
+    /// requests it receives.
+    pub fn unlimited() -> Self {
+        Self {
+            limit: u32::MAX,
+            window: QuotaWindow::Day,
+            unlimited: true,
             state: Mutex::new(QuotaState {
                 used: 0,
                 period: (0, 0, 0),
@@ -47,6 +65,16 @@ impl QuotaGuard {
     /// The budget of the current window.
     pub fn limit(&self) -> u32 {
         self.limit
+    }
+
+    /// The budget of the current window, when the guard has one.
+    ///
+    /// An unlimited guard has no budget, so it has no limit to report.
+    pub fn bounded_limit(&self) -> Option<u32> {
+        if self.unlimited {
+            return None;
+        }
+        Some(self.limit)
     }
 
     /// The number of lookups already spent in the current window.
@@ -69,6 +97,10 @@ impl QuotaGuard {
             Err(poisoned) => poisoned.into_inner(),
         };
         self.roll_over(&mut state, now);
+        if self.unlimited {
+            state.used = state.used.saturating_add(1);
+            return true;
+        }
         if state.used >= self.limit {
             return false;
         }
@@ -123,5 +155,16 @@ mod tests {
         assert!(guard.try_consume(first));
         assert!(!guard.try_consume(second));
         assert!(guard.try_consume(third));
+    }
+
+    #[test]
+    fn an_unlimited_quota_never_refuses_a_request() {
+        let guard = QuotaGuard::unlimited();
+        let now = datetime!(2026-01-01 00:00:00 UTC);
+        for _ in 0..1_000 {
+            assert!(guard.try_consume(now));
+        }
+        assert_eq!(guard.used(now), 1_000);
+        assert_eq!(guard.bounded_limit(), None);
     }
 }
