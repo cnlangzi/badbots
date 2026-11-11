@@ -42,7 +42,7 @@ fn config(abuseipdb_url: &str, crowdsec_url: &str) -> Config {
 async fn a_failing_provider_does_not_discard_the_evidence_of_the_other() {
     let abuseipdb = MockServer::start().await;
     let body = render(
-        &fixture("abuseipdb/web_app_attack.json"),
+        &fixture("abuseipdb/no_reports.json"),
         OffsetDateTime::now_utc(),
     );
     Mock::given(method("GET"))
@@ -66,23 +66,62 @@ async fn a_failing_provider_does_not_discard_the_evidence_of_the_other() {
         .build()
         .expect("the library is built");
 
-    let report = bots.enrich_ip(ip()).await;
+    let verdict = bots.verify_ip(ip()).await;
 
-    assert_eq!(report.verdict.classification, Classification::Bad);
-    assert_eq!(report.verdict.reason, VerdictReason::Convicted);
+    assert_eq!(verdict.classification, Classification::Unknown);
+    assert_eq!(verdict.reason, VerdictReason::NoEvidence);
+    assert_eq!(verdict.coverage.definitive, vec![ProviderId::ABUSEIPDB]);
+    assert_eq!(verdict.coverage.failed.len(), 1);
+    assert_eq!(verdict.coverage.failed[0].0, ProviderId::CROWDSEC);
     assert_eq!(
-        report.verdict.coverage.definitive,
-        vec![ProviderId::ABUSEIPDB]
-    );
-    assert_eq!(report.verdict.coverage.failed.len(), 1);
-    assert_eq!(report.verdict.coverage.failed[0].0, ProviderId::CROWDSEC);
-    assert_eq!(
-        report.verdict.coverage.failed[0].1,
+        verdict.coverage.failed[0].1,
         ProviderError::Status { code: 500 }
     );
-    assert_eq!(report.verdict.evidence.len(), 1);
-    assert_eq!(report.verdict.evidence[0].provider, ProviderId::ABUSEIPDB);
 
     let assessed = bots.assess_ip(ip());
-    assert_eq!(assessed.classification, Classification::Bad);
+    assert_eq!(assessed.coverage.failed.len(), 1);
+    assert_eq!(assessed.coverage.failed[0].0, ProviderId::CROWDSEC);
+}
+
+#[tokio::test]
+async fn a_conviction_stops_the_sequence_of_providers() {
+    let abuseipdb = MockServer::start().await;
+    let body = render(
+        &fixture("abuseipdb/web_app_attack.json"),
+        OffsetDateTime::now_utc(),
+    );
+    Mock::given(method("GET"))
+        .and(path("/api/v2/check"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .mount(&abuseipdb)
+        .await;
+
+    let crowdsec = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v2/smoke/45.32.1.1"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .mount(&crowdsec)
+        .await;
+
+    let bots = BadBots::builder()
+        .config(config(
+            &format!("{}/api/v2", abuseipdb.uri()),
+            &format!("{}/v2", crowdsec.uri()),
+        ))
+        .build()
+        .expect("the library is built");
+
+    let verdict = bots.verify_ip(ip()).await;
+
+    assert_eq!(verdict.classification, Classification::Bad);
+    assert_eq!(verdict.reason, VerdictReason::Convicted);
+    assert_eq!(verdict.coverage.definitive, vec![ProviderId::ABUSEIPDB]);
+    assert!(
+        crowdsec
+            .received_requests()
+            .await
+            .expect("the requests are recorded")
+            .is_empty(),
+        "the second provider was asked although the address was convicted"
+    );
 }

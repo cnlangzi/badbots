@@ -84,6 +84,7 @@ impl IpIndex {
     }
 
     /// The number of observations the index holds.
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.exact.values().map(Vec::len).sum::<usize>()
             + self
@@ -99,6 +100,7 @@ impl IpIndex {
     }
 
     /// Whether the index holds no observation.
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

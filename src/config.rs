@@ -208,9 +208,9 @@ pub struct Config {
     /// How prefix-scoped observations may carry the verdict.
     #[serde(default)]
     pub network_scope_policy: NetworkScopePolicy,
-    /// The number of upstream lookups that may run at the same time.
-    #[serde(default = "default_max_concurrent_enrichments")]
-    pub max_concurrent_enrichments: usize,
+    /// The number of verifications that may run at the same time.
+    #[serde(default = "default_max_concurrent_verifications")]
+    pub max_concurrent_verifications: usize,
     /// The number of cached lookup results.
     #[serde(default = "default_cache_capacity")]
     pub cache_capacity: usize,
@@ -235,7 +235,7 @@ fn default_failure_ttl() -> Duration {
     Duration::from_secs(5 * 60)
 }
 
-fn default_max_concurrent_enrichments() -> usize {
+fn default_max_concurrent_verifications() -> usize {
     4
 }
 
@@ -256,7 +256,7 @@ impl Default for Config {
             negative_ttl: default_negative_ttl(),
             failure_ttl: default_failure_ttl(),
             network_scope_policy: NetworkScopePolicy::default(),
-            max_concurrent_enrichments: default_max_concurrent_enrichments(),
+            max_concurrent_verifications: default_max_concurrent_verifications(),
             cache_capacity: default_cache_capacity(),
             user_agent: UserAgentConfig::default(),
         }

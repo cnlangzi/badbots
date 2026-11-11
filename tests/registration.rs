@@ -171,20 +171,16 @@ async fn a_registered_provider_contributes_its_evidence() {
         .build()
         .expect("the library is built");
 
-    let report = bots.enrich_ip(address("45.32.1.1")).await;
+    let verdict = bots.verify_ip(address("45.32.1.1")).await;
 
-    assert_eq!(report.outcomes.len(), 1);
-    assert_eq!(report.outcomes[0].provider, ProviderId::new("internal"));
-    assert!(report.outcomes[0].result.is_ok());
-    assert_eq!(report.verdict.evidence.len(), 1);
     assert_eq!(
-        report.verdict.evidence[0].provider,
-        ProviderId::new("internal")
+        verdict.coverage.definitive,
+        vec![ProviderId::new("internal")]
     );
-    assert_eq!(
-        report.verdict.evidence[0].family,
-        SourceFamily::new("internal")
-    );
+    assert!(verdict.coverage.failed.is_empty());
+    assert_eq!(verdict.evidence.len(), 1);
+    assert_eq!(verdict.evidence[0].provider, ProviderId::new("internal"));
+    assert_eq!(verdict.evidence[0].family, SourceFamily::new("internal"));
 
     let requests = server
         .received_requests()
@@ -217,8 +213,8 @@ async fn the_answer_of_a_registered_provider_is_cached_under_its_id() {
         .build()
         .expect("the library is built");
 
-    bots.enrich_ip(address("45.32.1.1")).await;
-    bots.enrich_ip(address("45.32.1.1")).await;
+    bots.verify_ip(address("45.32.1.1")).await;
+    bots.verify_ip(address("45.32.1.1")).await;
 
     let requests = server
         .received_requests()
@@ -247,7 +243,7 @@ async fn the_runtime_of_a_registered_provider_spends_the_quota_of_the_registrati
         .build()
         .expect("the library is built");
 
-    bots.enrich_ip(address("45.32.1.1")).await;
+    bots.verify_ip(address("45.32.1.1")).await;
 
     let status = status_of(&bots, ProviderId::new("internal"));
     assert_eq!(status.quota_used, Some(1));
@@ -313,18 +309,12 @@ async fn the_engine_stamps_the_identity_of_the_registering_provider() {
         .build()
         .expect("the library is built");
 
-    let report = bots.enrich_ip(address("45.32.1.1")).await;
+    let verdict = bots.verify_ip(address("45.32.1.1")).await;
 
+    assert_eq!(verdict.evidence[0].provider, ProviderId::new("internal"));
+    assert_eq!(verdict.evidence[0].family, SourceFamily::new("internal"));
     assert_eq!(
-        report.verdict.evidence[0].provider,
-        ProviderId::new("internal")
-    );
-    assert_eq!(
-        report.verdict.evidence[0].family,
-        SourceFamily::new("internal")
-    );
-    assert_eq!(
-        report.verdict.coverage.definitive,
+        verdict.coverage.definitive,
         vec![ProviderId::new("internal")]
     );
 }
@@ -423,11 +413,11 @@ async fn two_providers_of_one_family_count_as_one_vote() {
         .build()
         .expect("the library is built");
 
-    let report = bots.enrich_ip(address("45.32.1.1")).await;
+    let verdict = bots.verify_ip(address("45.32.1.1")).await;
 
-    assert_eq!(report.verdict.evidence.len(), 2);
-    assert_eq!(report.verdict.classification, Classification::Suspect);
-    assert_eq!(report.verdict.reason, VerdictReason::EvidencePresent);
+    assert_eq!(verdict.evidence.len(), 2);
+    assert_eq!(verdict.classification, Classification::Suspect);
+    assert_eq!(verdict.reason, VerdictReason::EvidencePresent);
 }
 
 #[tokio::test]
@@ -443,10 +433,10 @@ async fn two_providers_of_two_families_corroborate() {
         .build()
         .expect("the library is built");
 
-    let report = bots.enrich_ip(address("45.32.1.1")).await;
+    let verdict = bots.verify_ip(address("45.32.1.1")).await;
 
-    assert_eq!(report.verdict.classification, Classification::Bad);
-    assert_eq!(report.verdict.reason, VerdictReason::Convicted);
+    assert_eq!(verdict.classification, Classification::Bad);
+    assert_eq!(verdict.reason, VerdictReason::Convicted);
 }
 
 #[tokio::test]
@@ -472,21 +462,16 @@ async fn the_quota_of_a_registered_provider_is_exhausted() {
         .build()
         .expect("the library is built");
 
-    let first = bots.enrich_ip(address("45.32.1.1")).await;
-    assert!(first.outcomes[0].result.is_ok());
+    let first = bots.verify_ip(address("45.32.1.1")).await;
+    assert!(first.coverage.failed.is_empty());
 
-    let second = bots.enrich_ip(address("45.32.1.2")).await;
-    assert!(matches!(
-        second.outcomes[0].result,
-        Err(ProviderError::QuotaExhausted)
-    ));
+    let second = bots.verify_ip(address("45.32.1.2")).await;
     assert_eq!(
-        second.verdict.coverage.failed,
+        second.coverage.failed,
         vec![(ProviderId::new("internal"), ProviderError::QuotaExhausted)]
     );
     assert!(
         second
-            .verdict
             .evidence
             .iter()
             .any(|evidence| evidence.provider == ProviderId::new("other")),
@@ -515,8 +500,8 @@ async fn an_unlimited_quota_never_refuses_a_registered_provider() {
         .expect("the library is built");
 
     for index in 1..=5u8 {
-        let report = bots.enrich_ip(address(&format!("45.32.1.{index}"))).await;
-        assert!(report.outcomes[0].result.is_ok());
+        let verdict = bots.verify_ip(address(&format!("45.32.1.{index}"))).await;
+        assert!(verdict.coverage.failed.is_empty());
     }
 
     let status = status_of(&bots, ProviderId::new("internal"));

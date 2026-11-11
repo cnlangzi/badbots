@@ -14,7 +14,7 @@ use ipnet::IpNet;
 use time::OffsetDateTime;
 
 use crate::error::ProviderError;
-use crate::index::ADDRESS_KEY;
+use crate::index::ip_index::ADDRESS_KEY;
 use crate::model::{
     Assertion, Evidence, EvidenceStrength, MatchScope, ObservationWindow, ProviderId, SourceFamily,
     ThreatCategory,

@@ -16,7 +16,7 @@ use serde::Deserialize;
 use time::OffsetDateTime;
 
 use crate::error::ProviderError;
-use crate::index::ADDRESS_KEY;
+use crate::index::ip_index::ADDRESS_KEY;
 use crate::model::{
     Assertion, CoverageLevel, Evidence, EvidenceStrength, MatchScope, ObservationWindow,
     ProviderId, SourceFamily, ThreatCategory,

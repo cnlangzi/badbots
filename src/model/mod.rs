@@ -14,6 +14,6 @@ pub use evidence::{
 };
 pub use ip::{is_assessable, network_contains, normalize};
 pub use request_signals::{
-    BotKind, BotVerdict, RequestVerdict, UaState, UserAgentMarkers, classify_user_agent,
-    is_well_formed_user_agent, ua_state,
+    BotKind, BotVerdict, UaState, UserAgentMarkers, classify_user_agent, is_well_formed_user_agent,
+    ua_state,
 };

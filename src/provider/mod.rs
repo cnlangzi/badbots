@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::error::ProviderError;
-use crate::model::{CoverageLevel, Evidence, IpVerdict, ProviderId, SourceFamily, Suppression};
+use crate::model::{CoverageLevel, Evidence, ProviderId, SourceFamily, Suppression};
 
 pub mod lookup;
 pub mod services;
@@ -148,8 +148,8 @@ impl<T: LookupProvider + ?Sized> LookupProvider for Arc<T> {
 /// A provider that publishes a list of addresses.
 ///
 /// An observation about an exact address carries that address in its upstream
-/// values under the key [`ADDRESS_KEY`](crate::index::ADDRESS_KEY), because the
-/// index resolves an address to its observations from the snapshot alone.
+/// values under the key `address`, because the index resolves an address to its
+/// observations from the snapshot alone.
 #[async_trait]
 pub trait FeedProvider: Send + Sync {
     /// The identifier of the provider.
@@ -188,26 +188,6 @@ impl<T: FeedProvider + ?Sized> FeedProvider for Arc<T> {
     async fn fetch(&self) -> Result<FeedSnapshot, ProviderError> {
         (**self).fetch().await
     }
-}
-
-/// The outcome of one provider lookup.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct ProviderOutcome {
-    /// The provider that was asked.
-    pub provider: ProviderId,
-    /// The answer, or the reason there is none.
-    pub result: Result<ProviderFinding, ProviderError>,
-}
-
-/// The report of one enrichment run.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct EnrichmentReport {
-    /// The assessed address.
-    pub ip: IpAddr,
-    /// The verdict the evidence produced.
-    pub verdict: IpVerdict,
-    /// The outcome of every provider that was asked.
-    pub outcomes: Vec<ProviderOutcome>,
 }
 
 /// The result of one feed refresh.

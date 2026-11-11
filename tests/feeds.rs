@@ -305,11 +305,11 @@ async fn the_attribution_of_a_loaded_list_is_reachable() {
     bots.refresh_feeds().await;
 
     assert_eq!(
-        bots.feed_attribution(&ProviderId::new("scripted")),
+        bots.feed_attribution(ProviderId::new("scripted")),
         Some(String::new())
     );
     assert!(
-        bots.feed_header_lines(&ProviderId::new("scripted"))
+        bots.feed_header_lines(ProviderId::new("scripted"))
             .is_empty()
     );
 }
@@ -569,8 +569,8 @@ async fn one_family_never_convicts_and_two_families_do() {
         .build()
         .expect("the library is built");
 
-    let report = bots.enrich_ip(address("45.32.1.1")).await;
-    assert_eq!(report.verdict.classification, Classification::Suspect);
+    let verdict = bots.verify_ip(address("45.32.1.1")).await;
+    assert_eq!(verdict.classification, Classification::Suspect);
 
     Mock::given(method("GET"))
         .and(path("/threatintel.txt"))
@@ -599,8 +599,8 @@ async fn one_family_never_convicts_and_two_families_do() {
         .expect("the library is built");
 
     bots.refresh_feeds().await;
-    let report = bots.enrich_ip(address("45.32.1.1")).await;
-    assert_eq!(report.verdict.classification, Classification::Bad);
+    let verdict = bots.verify_ip(address("45.32.1.1")).await;
+    assert_eq!(verdict.classification, Classification::Bad);
 }
 
 #[tokio::test]
@@ -647,7 +647,7 @@ async fn a_refresh_does_not_disturb_the_cached_lookups() {
         .build()
         .expect("the library is built");
 
-    bots.enrich_ip(address("45.32.1.1")).await;
+    bots.verify_ip(address("45.32.1.1")).await;
     bots.refresh_feeds().await;
 
     let verdict = bots.assess_ip(address("45.32.1.1"));

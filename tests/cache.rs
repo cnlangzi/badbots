@@ -70,16 +70,16 @@ async fn an_answer_expires_at_the_declared_expiry_when_that_is_the_earlier_one()
         .build()
         .expect("the library is built");
 
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
 
     // The upstream declares an expiry 29 days from now, the host bound is 30
     // days, so the declared expiry is the earlier of the two.
     clock.advance(Duration::from_secs(29 * 24 * 60 * 60 - 60));
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
     assert_eq!(requests(&server).await, 1);
 
     clock.advance(Duration::from_secs(120));
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
     assert_eq!(requests(&server).await, 2);
 }
 
@@ -95,17 +95,17 @@ async fn an_answer_with_evidence_expires_at_the_host_bound_when_it_is_the_earlie
         .build()
         .expect("the library is built");
 
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
 
     // The upstream declares an expiry 30 days from now, the host bound is one
     // hour, so the host bound is the earlier of the two and the answer is
     // re-fetched when the positive bound elapses.
     clock.advance(Duration::from_secs(3_599));
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
     assert_eq!(requests(&server).await, 1);
 
     clock.advance(Duration::from_secs(2));
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
     assert_eq!(requests(&server).await, 2);
 }
 
@@ -121,14 +121,14 @@ async fn a_negative_result_is_reused_until_the_negative_bound_elapses() {
         .build()
         .expect("the library is built");
 
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
 
     clock.advance(Duration::from_secs(3_599));
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
     assert_eq!(requests(&server).await, 1);
 
     clock.advance(Duration::from_secs(2));
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
     assert_eq!(requests(&server).await, 2);
 }
 
@@ -144,17 +144,17 @@ async fn a_failure_is_not_asked_again_inside_the_failure_window() {
         .build()
         .expect("the library is built");
 
-    let first = bots.enrich_ip(ip()).await;
+    let first = bots.verify_ip(ip()).await;
     assert!(matches!(
-        first.outcomes[0].result,
-        Err(ProviderError::Status { code: 500 })
+        first.coverage.failed[0].1,
+        ProviderError::Status { code: 500 }
     ));
 
     clock.advance(Duration::from_secs(60));
-    let second = bots.enrich_ip(ip()).await;
+    let second = bots.verify_ip(ip()).await;
     assert!(matches!(
-        second.outcomes[0].result,
-        Err(ProviderError::Status { code: 500 })
+        second.coverage.failed[0].1,
+        ProviderError::Status { code: 500 }
     ));
 
     assert_eq!(requests(&server).await, 1);
@@ -172,10 +172,10 @@ async fn a_failure_is_asked_again_after_the_failure_window() {
         .build()
         .expect("the library is built");
 
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
 
     clock.advance(Duration::from_secs(301));
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
 
     assert_eq!(requests(&server).await, 2);
 }
@@ -192,8 +192,8 @@ async fn a_sub_second_failure_window_is_honoured() {
         .build()
         .expect("the library is built");
 
-    bots.enrich_ip(ip()).await;
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
+    bots.verify_ip(ip()).await;
 
     assert_eq!(requests(&server).await, 1);
 }
@@ -209,7 +209,7 @@ async fn a_stored_failure_is_reported_by_the_next_assessment() {
         .build()
         .expect("the library is built");
 
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
 
     let assessed = bots.assess_ip(ip());
     assert_eq!(assessed.coverage.failed.len(), 1);
@@ -235,9 +235,9 @@ async fn the_builder_sets_every_bound() {
         .build()
         .expect("the library is built");
 
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
     clock.advance(Duration::from_secs(3_601));
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
     assert_eq!(
         requests(&positive).await,
         2,
@@ -255,9 +255,9 @@ async fn the_builder_sets_every_bound() {
         .build()
         .expect("the library is built");
 
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
     clock.advance(Duration::from_secs(7_201));
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
     assert_eq!(
         requests(&negative).await,
         2,
@@ -275,9 +275,9 @@ async fn the_builder_sets_every_bound() {
         .build()
         .expect("the library is built");
 
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
     clock.advance(Duration::from_secs(60));
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
     assert_eq!(
         requests(&failing).await,
         1,
@@ -285,6 +285,6 @@ async fn the_builder_sets_every_bound() {
     );
 
     clock.advance(Duration::from_secs(241));
-    bots.enrich_ip(ip()).await;
+    bots.verify_ip(ip()).await;
     assert_eq!(requests(&failing).await, 2);
 }
