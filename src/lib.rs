@@ -138,7 +138,8 @@ impl Shared {
     /// The providers are read in the order a verification asks them in, and the
     /// reading stops as soon as the findings satisfy the conviction rule, so
     /// that the coverage of the assessment is the coverage a verification would
-    /// report.
+    /// report. The verification reads the answers in the same order and stops
+    /// at the same point.
     fn compose(&self, ip: IpAddr, now: OffsetDateTime) -> IpVerdict {
         let mut input = VerdictInput::new(ip);
 
@@ -179,6 +180,10 @@ impl Shared {
     /// The rule is the classification of the decision engine, so the condition
     /// that ends the sequence of providers and the condition that produces the
     /// final assessment cannot drift apart.
+    ///
+    /// A provider that is not asked cannot suppress anything: a suppression
+    /// withdraws the evidence of the provider that published it, so a provider
+    /// that was not asked has no evidence to withdraw.
     fn is_convicted(&self, input: &VerdictInput, now: OffsetDateTime) -> bool {
         classify(input, &self.config, now).classification == Classification::Bad
     }
@@ -439,14 +444,19 @@ impl BadBots {
     ///
     /// An assessment that is not `Bad` makes sure that a verification of the
     /// address runs, so that the answer becomes more precise without the caller
-    /// waiting for it.
+    /// waiting for it. An address that cannot be assessed is never verified,
+    /// and an address that no provider can be asked about needs no verification
+    /// either.
     pub fn assess_ip(&self, ip: IpAddr) -> IpVerdict {
         let shared = &self.inner.shared;
         let now = shared.clock.now();
         let ip = normalize(ip);
         let verdict = shared.compose(ip, now);
 
-        if verdict.classification != Classification::Bad {
+        if verdict.classification != Classification::Bad
+            && is_assessable(ip)
+            && !shared.providers.is_empty()
+        {
             self.inner.ensure_verification(ip);
         }
         verdict
@@ -480,7 +490,7 @@ impl BadBots {
         }
 
         let verification = self.inner.ensure_verification(ip);
-        verification.wait(&shared.config).await
+        verification.wait(shared).await
     }
 
     /// Refreshes every configured feed.

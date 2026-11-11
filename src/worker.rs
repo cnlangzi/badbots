@@ -17,7 +17,6 @@ use time::OffsetDateTime;
 use tokio::sync::{mpsc, watch};
 
 use crate::Shared;
-use crate::config::Config;
 use crate::lock;
 use crate::model::{IpVerdict, VerdictInput};
 use crate::provider::{LookupProvider, ProviderFinding};
@@ -44,7 +43,7 @@ impl Verification {
     ///
     /// The wait happens on the runtime of the caller, but no request is made
     /// there: the request belongs to the worker thread.
-    pub(crate) async fn wait(&self, config: &Config) -> IpVerdict {
+    pub(crate) async fn wait(&self, shared: &Shared) -> IpVerdict {
         let mut receiver = self.result.subscribe();
         loop {
             if let Some(verdict) = receiver.borrow_and_update().clone() {
@@ -53,8 +52,8 @@ impl Verification {
             if receiver.changed().await.is_err() {
                 return crate::classify(
                     &VerdictInput::new(self.ip),
-                    config,
-                    OffsetDateTime::now_utc(),
+                    &shared.config,
+                    shared.clock.now(),
                 );
             }
         }
@@ -100,12 +99,29 @@ impl Worker {
     }
 
     /// Queues a verification and starts the thread when it is not running yet.
+    ///
+    /// A verification that cannot be queued is completed with the assessment of
+    /// the local state, so that the caller that waits for it is not left
+    /// waiting.
     pub(crate) fn enqueue(&self, job: Job) {
-        let mut state = lock(&self.state);
-        if state.thread.is_none() {
-            state.start(Arc::clone(&self.shared));
+        let refused = {
+            let mut state = lock(&self.state);
+            if state.thread.is_none() {
+                state.start(Arc::clone(&self.shared));
+            }
+            state.sender.send(job).err()
+        };
+
+        if let Some(refused) = refused {
+            let job = refused.0;
+            tracing::error!(
+                ip = %job.ip,
+                "the verification could not be queued for the worker"
+            );
+            let verdict = self.shared.compose(job.ip, self.shared.clock.now());
+            forget_running(&self.shared, job.ip, &job.verification);
+            job.verification.complete(verdict);
         }
-        let _ = state.sender.send(job);
     }
 
     /// Stops the thread and waits for the verifications in flight to finish.
@@ -120,16 +136,24 @@ impl Worker {
 
 impl WorkerState {
     /// Starts the thread of the worker.
+    ///
+    /// A thread that cannot be started leaves the queue closed, so that the
+    /// verifications that are queued are completed with the assessment of the
+    /// local state instead of waiting for a worker that never comes.
     fn start(&mut self, shared: Arc<Shared>) {
         let Some(receiver) = self.receiver.take() else {
             return;
         };
         let shutdown = self.shutdown_rx.clone();
-        let thread = std::thread::Builder::new()
+        match std::thread::Builder::new()
             .name("badbots-worker".to_string())
             .spawn(move || run(shared, receiver, shutdown))
-            .expect("the worker thread starts");
-        self.thread = Some(thread);
+        {
+            Ok(thread) => self.thread = Some(thread),
+            Err(error) => {
+                tracing::error!(%error, "the worker thread could not be started");
+            }
+        }
     }
 }
 
@@ -261,9 +285,19 @@ fn forget_running(shared: &Shared, ip: IpAddr, verification: &Arc<Verification>)
 /// providers one at a time, because a Primary provider may convict on its own,
 /// and finally the providers that cannot convict on their own, because asking
 /// them one at a time would only add latency.
+///
+/// The assessment of the local state reads the answers in the same order and
+/// stops at the same point, so that the coverage of the two is the same.
+///
+/// An address that cannot be assessed is never asked about: a private or a
+/// loopback address has no public reputation and must not reach an upstream.
 async fn assess(shared: &Arc<Shared>, ip: IpAddr) -> IpVerdict {
     let now = shared.clock.now();
     let mut input = VerdictInput::new(ip);
+
+    if !crate::model::is_assessable(ip) {
+        return crate::classify(&input, &shared.config, now);
+    }
 
     shared.merge_feeds(&mut input);
     if shared.is_convicted(&input, now) {

@@ -79,7 +79,10 @@ let verdict = bots.verify_ip(client_ip).await;
 failures that are remembered and the lists that are loaded. It performs no
 network I/O on the calling thread. When the answer is not `Bad`, it makes sure
 that a verification of the address runs, so that the answer of the next request
-is drawn from a fresher source.
+is drawn from a fresher source. An address that cannot be assessed — a private,
+loopback or otherwise non-routable address — is never verified and never
+reaches an upstream, and a library without a lookup provider has nothing to
+verify.
 
 `verify_ip` waits for that verification. At most one verification runs for an
 address: a second caller waits for the running one instead of starting another.

@@ -2,17 +2,44 @@
 
 use std::net::IpAddr;
 use std::sync::{Mutex, MutexGuard, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use badbots::{BadBots, Config};
+use async_trait::async_trait;
+use badbots::provider::{LookupProvider, ProviderCapability, ProviderFinding};
+use badbots::{
+    BadBots, Config, CoverageLevel, ProviderError, ProviderId, SourceFamily, daily_guard,
+};
 
 fn ip() -> IpAddr {
     "45.32.1.1".parse().unwrap()
 }
 
+/// A provider that answers without a request.
+struct SilentProvider;
+
+#[async_trait]
+impl LookupProvider for SilentProvider {
+    fn id(&self) -> ProviderId {
+        ProviderId::new("silent")
+    }
+
+    fn family(&self) -> SourceFamily {
+        SourceFamily::new("silent")
+    }
+
+    fn capability(&self) -> ProviderCapability {
+        ProviderCapability::Primary
+    }
+
+    async fn lookup(&self, _ip: IpAddr) -> Result<ProviderFinding, ProviderError> {
+        Ok(ProviderFinding::empty(self.id(), CoverageLevel::Partial))
+    }
+}
+
 fn bots() -> BadBots {
     BadBots::builder()
         .config(Config::default())
+        .lookup_provider(daily_guard(100), |_runtime| SilentProvider)
         .build()
         .expect("the library is built")
 }
@@ -24,6 +51,20 @@ fn guard() -> MutexGuard<'static, ()> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/// Waits until the condition holds or the deadline passes.
+fn wait_until(mut condition: impl FnMut() -> bool, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if condition() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -53,17 +94,14 @@ fn the_worker_thread_starts_with_the_first_verification_and_stops_with_the_last_
 
     let bots = bots();
     bots.assess_ip(ip());
-    std::thread::sleep(Duration::from_millis(200));
     assert!(
-        thread_count() > before,
+        wait_until(|| thread_count() > before, Duration::from_secs(10)),
         "the verification did not start a worker thread"
     );
 
     drop(bots);
-    std::thread::sleep(Duration::from_millis(200));
-    assert_eq!(
-        thread_count(),
-        before,
+    assert!(
+        wait_until(|| thread_count() == before, Duration::from_secs(10)),
         "the worker thread outlived the last handle"
     );
 }

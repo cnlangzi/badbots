@@ -712,6 +712,50 @@ async fn a_non_routable_address_is_never_asked_about() {
 }
 
 #[tokio::test]
+async fn a_non_routable_address_is_never_verified_in_the_background() {
+    let recorder = Arc::new(Recorder::default());
+    let bots = BadBots::builder()
+        .config(Config::default())
+        .lookup_provider(
+            daily_guard(100),
+            test_provider(
+                Arc::clone(&recorder),
+                "primary",
+                "primary",
+                ProviderCapability::Primary,
+                true,
+                None,
+            ),
+        )
+        .build()
+        .expect("the library is built");
+
+    let verdict = bots.assess_ip("10.0.0.1".parse().unwrap());
+
+    assert_eq!(verdict.classification, Classification::Unknown);
+    assert_eq!(verdict.reason, VerdictReason::NoCoverage);
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        recorder.calls().is_empty(),
+        "a private address reached the provider"
+    );
+}
+
+#[tokio::test]
+async fn an_address_no_provider_can_be_asked_about_is_not_verified() {
+    let bots = BadBots::builder()
+        .config(Config::default())
+        .build()
+        .expect("the library is built");
+
+    let verdict = bots.assess_ip(ip());
+
+    assert_eq!(verdict.classification, Classification::Unknown);
+    assert_eq!(verdict.reason, VerdictReason::NoCoverage);
+}
+
+#[tokio::test]
 async fn the_quota_of_a_provider_bounds_the_verifications() {
     let recorder = Arc::new(Recorder::default());
     let bots = BadBots::builder()
