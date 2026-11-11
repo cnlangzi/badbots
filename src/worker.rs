@@ -307,21 +307,14 @@ async fn assess(shared: &Arc<Shared>, ip: IpAddr) -> IpVerdict {
         return crate::classify(&input, &shared.config, now);
     }
 
-    if shared.config.evidence_policy == EvidencePolicy::Lenient {
-        for provider in shared.ordered_providers() {
-            match ask(shared, provider, ip, now).await {
-                Ok(finding) => shared.merge(&mut input, provider.as_ref(), &finding),
-                Err(error) => input.coverage.record_failure(provider.id(), error),
-            }
-            if shared.is_bad(&input, now) {
-                return crate::classify(&input, &shared.config, now);
-            }
-        }
+    let lenient = shared.config.evidence_policy == EvidencePolicy::Lenient;
+    let providers: Vec<&Arc<dyn LookupProvider>> = if lenient {
+        shared.ordered_providers()
+    } else {
+        shared.primary_providers().collect()
+    };
 
-        return crate::classify(&input, &shared.config, now);
-    }
-
-    for provider in shared.primary_providers() {
+    for provider in providers {
         match ask(shared, provider, ip, now).await {
             Ok(finding) => shared.merge(&mut input, provider.as_ref(), &finding),
             Err(error) => input.coverage.record_failure(provider.id(), error),
@@ -329,6 +322,10 @@ async fn assess(shared: &Arc<Shared>, ip: IpAddr) -> IpVerdict {
         if shared.is_bad(&input, now) {
             return crate::classify(&input, &shared.config, now);
         }
+    }
+
+    if lenient {
+        return crate::classify(&input, &shared.config, now);
     }
 
     let corroborating: Vec<_> = shared.corroborating_providers().collect();

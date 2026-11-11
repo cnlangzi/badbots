@@ -27,8 +27,9 @@ pub enum NetworkScopePolicy {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvidencePolicy {
-    /// One strong observation about the exact address, or two corroborating
-    /// source families, are needed for a conviction. This is the default.
+    /// One `Convicting` observation that satisfies the single-source condition,
+    /// or two corroborating source families, are needed for a conviction. This
+    /// is the default.
     #[default]
     Strict,
     /// Every valid observation that no provider withdrew is enough for a
