@@ -28,7 +28,12 @@ jobs:
       - name: Set the version from the tag
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: scripts/set-version.sh "$VERSION"
+        run: |
+          scripts/set-version.sh "$VERSION"
+          grep -qxF "version = \"$VERSION\"" Cargo.toml || {
+            echo "::error::Cargo.toml does not carry $VERSION after the rewrite"
+            exit 1
+          }
 
       - name: Check the formatting
         run: cargo fmt --all -- --check
