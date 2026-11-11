@@ -17,10 +17,12 @@ pub mod abuseipdb {
     /// The age of the most recent report a conviction needs.
     pub const MAX_REPORT_AGE_DAYS: i64 = 30;
 
-    /// The strength of an AbuseIPDB observation.
+    /// The strength of the conviction bar of an AbuseIPDB report set.
     ///
-    /// Returns `None` when the observation carries no evidence at all.
-    pub fn strength(
+    /// A conviction needs a score of at least 75, at least two distinct
+    /// reporters, a report within 30 days and a category of the inbound attack
+    /// set. Returns `None` when the report set does not satisfy the bar.
+    pub fn conviction(
         score: u32,
         distinct_users: u32,
         has_inbound_category: bool,
@@ -33,6 +35,17 @@ pub mod abuseipdb {
         {
             return Some(EvidenceStrength::Convicting);
         }
+        None
+    }
+
+    /// The strength of the observation bar of an AbuseIPDB report set.
+    ///
+    /// An observation needs a score of at least 25 and at least two distinct
+    /// reporters, or a score of at least 75 and at least one distinct
+    /// reporter. The category of the reports does not gate the bar, so a report
+    /// set about scanning or spam is an observation as well. Returns `None`
+    /// when the report set does not satisfy the bar.
+    pub fn observation(score: u32, distinct_users: u32) -> Option<EvidenceStrength> {
         if (score >= SUSPICION_SCORE && distinct_users >= MIN_DISTINCT_USERS)
             || (score >= CONVICTION_SCORE && distinct_users >= 1)
         {
@@ -109,26 +122,38 @@ mod tests {
     #[test]
     fn abuseipdb_convicts_on_a_strong_recent_report() {
         assert_eq!(
-            abuseipdb::strength(100, 5, true, true),
+            abuseipdb::conviction(100, 5, true, true),
             Some(EvidenceStrength::Convicting)
         );
     }
 
     #[test]
+    fn abuseipdb_does_not_convict_without_an_inbound_category() {
+        assert_eq!(abuseipdb::conviction(100, 5, false, true), None);
+    }
+
+    #[test]
     fn abuseipdb_does_not_convict_below_the_score_or_user_bar() {
+        assert_eq!(abuseipdb::conviction(60, 5, true, true), None);
+        assert_eq!(abuseipdb::conviction(100, 1, true, true), None);
+        assert_eq!(abuseipdb::conviction(100, 5, true, false), None);
+    }
+
+    #[test]
+    fn abuseipdb_observes_a_moderate_score_with_several_reporters() {
         assert_eq!(
-            abuseipdb::strength(60, 5, true, true),
+            abuseipdb::observation(60, 5),
             Some(EvidenceStrength::Indicative)
         );
         assert_eq!(
-            abuseipdb::strength(100, 1, true, true),
+            abuseipdb::observation(100, 1),
             Some(EvidenceStrength::Indicative)
         );
     }
 
     #[test]
-    fn abuseipdb_produces_no_evidence_without_an_inbound_category() {
-        assert_eq!(abuseipdb::strength(100, 5, false, true), None);
-        assert_eq!(abuseipdb::strength(10, 3, true, true), None);
+    fn abuseipdb_observes_nothing_below_the_bar() {
+        assert_eq!(abuseipdb::observation(10, 3), None);
+        assert_eq!(abuseipdb::observation(60, 1), None);
     }
 }

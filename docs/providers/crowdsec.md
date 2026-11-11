@@ -10,7 +10,7 @@ the behaviors the upstream observed and the classifications it assigned.
 
    ```toml
    [dependencies]
-   badbots = { version = "0.1", features = ["crowdsec"] }
+   badbots = { version = "0.2", features = ["crowdsec"] }
    ```
 
 3. Enable the provider and supply the key:
@@ -113,18 +113,28 @@ uses it:
 | The reputation `benign` | A `Benign` suppression |
 | The reputation `safe` | A `Safe` suppression |
 
+| Situation | Strict policy | Lenient policy |
+|---|---|---|
+| A malicious reputation and a malicious behavior | A `Bad` verdict | A `Bad` verdict |
+| The reputation `suspicious` | A `Unknown` verdict with the reason `InsufficientEvidence` | A `Bad` verdict |
+| A background noise level of `high` | A `Unknown` verdict with the reason `InsufficientEvidence` | A `Bad` verdict |
+
 A suppression speaks for the provider that published it and constrains the
 evidence of that provider alone. A `Safe` suppression voids the evidence of the
 publishing provider: it no longer convicts on its own and no longer adds a
 corroboration vote. A `Benign` suppression keeps the evidence of the publishing
 provider, which may still corroborate but no longer convicts on its own.
 Neither of them constrains the evidence of another provider, so an address that
-one provider suppresses may still be convicted by another.
+one provider suppresses may still be convicted by another. Under the lenient
+policy a `Benign` suppression also keeps the evidence from producing a `Bad`
+verdict on its own, and the observations still coexist with the observations of
+another source family.
 
 A second pattern produces false positives without a suppression: a background
 noise level of `high` means that the upstream sees many addresses of that range
-behaving the same way. Such an address never convicts on its own; it produces a
-`Suspect` verdict instead.
+behaving the same way. Such an address never convicts on its own under the
+strict policy; it produces a `Unknown` verdict with the reason
+`InsufficientEvidence` instead, and a `Bad` verdict under the lenient policy.
 
 The upstream publishes the labels of the false-positive profile it assigned, and
 the provider records them in the upstream values of its observation. The `Safe`

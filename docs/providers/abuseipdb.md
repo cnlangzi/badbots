@@ -10,7 +10,7 @@ upstream has reports about it and how strongly the community reports it.
 
    ```toml
    [dependencies]
-   badbots = { version = "0.1", features = ["abuseipdb"] }
+   badbots = { version = "0.2", features = ["abuseipdb"] }
    ```
 
 3. Enable the provider and supply the key:
@@ -84,8 +84,31 @@ attack on this address:
 
 Category 14 (Port Scan) is recorded as reconnaissance and category 10, 11 and 12
 (spam) as abuse; neither belongs to the inbound attack set. The remaining
-upstream categories are not emitted as evidence. The upstream category
-identifiers are always preserved in `upstream_values["categories"]`.
+upstream categories are not emitted as evidence, because the library has no
+assertion for them. The upstream category identifiers are always preserved in
+`upstream_values["categories"]`.
+
+The provider publishes two bars, and they differ:
+
+| Bar | Conditions | Strength |
+|---|---|---|
+| The conviction bar | A score of at least 75, at least 2 distinct reporters, a report within 30 days and a category of the inbound attack set | `Convicting` |
+| The observation bar | A score of at least 25 with at least 2 distinct reporters, or a score of at least 75 with at least 1 distinct reporter | `Indicative` |
+
+A report set that satisfies the conviction bar produces a `Convicting`
+observation. A report set that satisfies the observation bar but not the
+conviction bar produces an `Indicative` observation, and the category of that
+observation is the category of the reports: a report set about scanning
+produces the assertion `Reconnaissance`, a report set about spam produces the
+assertion `Abuse`. The category of the reports therefore decides the assertion
+of the observation, and the observation bar does not require a category of the
+inbound attack set.
+
+| Situation | Strict policy | Lenient policy |
+|---|---|---|
+| The conviction bar is satisfied | A `Bad` verdict | A `Bad` verdict |
+| Only the observation bar is satisfied | A `Unknown` verdict with the reason `InsufficientEvidence` | A `Bad` verdict |
+| Neither bar is satisfied | A `Unknown` verdict with the reason `NoEvidence` | A `Unknown` verdict with the reason `NoEvidence` |
 
 The upstream publishes a whitelist flag for the addresses it considers
 legitimate. The provider consumes the flag: it withdraws its own claim about the
@@ -100,7 +123,7 @@ that another source family convicts is still convicted.
 |---|---|
 | A positive result expires | The earlier of 30 days after `lastReportedAt` and `Config::positive_ttl`, 30 days by default |
 | A negative result is reused for | `Config::negative_ttl`, 24 hours by default |
-| A report older than 30 days | Never convicts on its own |
+| A report older than 30 days | Never satisfies the conviction bar, and its observation expires with it |
 
 The upstream reports a point in time rather than a period, so no observation
 window is recorded. The library expires the answer at the earlier of the expiry
@@ -127,9 +150,10 @@ patterns are known to produce a conviction that a host may disagree with:
   base. The upstream reports `usageType`, `isp` and `domain` in the upstream
   values of the verdict, which is where a host recognizes such a range.
 - Tor exit nodes. The upstream reports `isTor` in the upstream values.
-- Scanner services that are reported because they scan. The library requires a
-  category of the inbound attack set, so a port scan alone produces no
-  evidence.
+- Scanner services that are reported because they scan. A port scan carries no
+  category of the inbound attack set, so it never convicts on its own. It does
+  produce an `Indicative` observation, which the strict policy does not convict
+  on and the lenient policy does.
 - Addresses the upstream whitelists. The provider withdraws its own claim about
   them and produces no evidence; the verdict carries the suppression.
 

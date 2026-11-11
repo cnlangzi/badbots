@@ -11,7 +11,7 @@ observation from either of them counts as one vote.
 
    ```toml
    [dependencies]
-   badbots = { version = "0.1", features = ["blocklist_de"] }
+   badbots = { version = "0.2", features = ["blocklist_de"] }
    ```
 
 2. Enable the provider:
@@ -124,11 +124,11 @@ ever tried to log in is listed next to an address that got in.
 
 This library therefore separates the two products of the publisher:
 
-| Situation | Effect |
-|---|---|
-| A list membership without any other evidence | A `Suspect` verdict, and never a vote |
-| A query answer with three or more attack events | A `Corroborating` observation that adds a vote |
-| Only Blocklist.de observed the address | Never a `Bad` verdict, because a family votes once |
+| Situation | Strict policy | Lenient policy |
+|---|---|---|
+| A list membership without any other evidence | A `Unknown` verdict with the reason `InsufficientEvidence`, and never a vote | A `Bad` verdict |
+| A query answer with three or more attack events | A `Corroborating` observation that adds a vote | A `Bad` verdict |
+| Only Blocklist.de observed the address | Never a `Bad` verdict, because a family votes once | A `Bad` verdict |
 
 The DShield list republishes the data of this publisher under a
 `blocklistde` label. Such an observation keeps the family `blocklist_de`, so a

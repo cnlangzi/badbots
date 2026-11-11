@@ -62,10 +62,9 @@ fn a_missing_user_agent_is_not_a_bot() {
 }
 
 #[test]
-fn the_classification_has_three_variants() {
+fn the_classification_has_two_variants() {
     let name = match Classification::Bad {
         Classification::Bad => "bad",
-        Classification::Suspect => "suspect",
         Classification::Unknown => "unknown",
     };
     assert_eq!(name, "bad");

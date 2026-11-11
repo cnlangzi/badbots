@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use badbots::{
     AbuseIpdbConfig, ApiKey, BadBots, BlocklistDeConfig, Classification, Config, ConfigError,
-    Coverage, CoverageLevel, DShieldConfig, Evidence, EvidenceStrength, MatchScope,
+    Coverage, CoverageLevel, DShieldConfig, Evidence, EvidencePolicy, EvidenceStrength, MatchScope,
     NetworkScopePolicy, ProviderId, SourceFamily, SpamhausConfig, Suppression, ThreatCategory,
     VerdictInput, VerdictReason,
 };
@@ -22,8 +22,38 @@ fn the_default_configuration_carries_the_documented_values() {
         config.network_scope_policy,
         NetworkScopePolicy::CorroborateOnly
     );
+    assert_eq!(config.evidence_policy, EvidencePolicy::Strict);
     assert_eq!(config.max_concurrent_verifications, 4);
     assert_eq!(config.cache_capacity, 10_000);
+}
+
+#[test]
+fn a_configuration_without_the_evidence_policy_is_strict() {
+    let decoded: Config = serde_json::from_str("{\"cache_capacity\":10}").unwrap();
+
+    assert_eq!(decoded.evidence_policy, EvidencePolicy::Strict);
+}
+
+#[test]
+fn the_evidence_policy_is_serialized_in_snake_case() {
+    let decoded: EvidencePolicy = serde_json::from_str("\"lenient\"").unwrap();
+    assert_eq!(decoded, EvidencePolicy::Lenient);
+
+    let decoded: EvidencePolicy = serde_json::from_str("\"strict\"").unwrap();
+    assert_eq!(decoded, EvidencePolicy::Strict);
+
+    assert_eq!(
+        serde_json::to_string(&EvidencePolicy::Lenient).unwrap(),
+        "\"lenient\""
+    );
+}
+
+#[test]
+fn the_builder_accepts_the_lenient_policy() {
+    BadBots::builder()
+        .evidence_policy(EvidencePolicy::Lenient)
+        .build()
+        .expect("the library is built");
 }
 
 #[test]
@@ -164,8 +194,8 @@ fn the_classification_is_a_pure_function_of_its_input() {
     let second = badbots::classify(&input, &Config::default(), now);
 
     assert_eq!(first, second);
-    assert_eq!(first.classification, Classification::Suspect);
-    assert_eq!(first.reason, VerdictReason::EvidencePresent);
+    assert_eq!(first.classification, Classification::Unknown);
+    assert_eq!(first.reason, VerdictReason::InsufficientEvidence);
 }
 
 #[test]

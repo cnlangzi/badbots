@@ -1,0 +1,29 @@
+{
+  "data": {
+    "ipAddress": "45.32.1.3",
+    "isPublic": true,
+    "ipVersion": 4,
+    "isWhitelisted": false,
+    "abuseConfidenceScore": 90,
+    "countryCode": "US",
+    "usageType": "Data Center",
+    "isp": "Example Hosting",
+    "domain": "example-hosting.test",
+    "hostnames": [],
+    "isTor": false,
+    "totalReports": 9,
+    "numDistinctUsers": 3,
+    "lastReportedAt": "{{last_reported_at}}",
+    "reports": [
+      {
+        "reportedAt": "{{last_reported_at}}",
+        "comment": "Spam relay",
+        "categories": [
+          10
+        ],
+        "reporterCountryCode": "NL",
+        "reporterCount": 1
+      }
+    ]
+  }
+}

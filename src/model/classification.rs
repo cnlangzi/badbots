@@ -1,4 +1,4 @@
-//! Verdict model: the three states an assessment can end in.
+//! Verdict model: the two states an assessment can end in.
 
 use std::net::IpAddr;
 
@@ -12,11 +12,9 @@ use crate::model::evidence::{Evidence, ProviderId, Suppression};
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Classification {
-    /// A conviction rule was satisfied.
+    /// The evidence bar of the policy was satisfied.
     Bad,
-    /// Valid evidence exists but no conviction rule was satisfied.
-    Suspect,
-    /// No usable evidence exists.
+    /// The evidence bar of the policy was not satisfied.
     Unknown,
 }
 
@@ -24,10 +22,10 @@ pub enum Classification {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VerdictReason {
-    /// A conviction rule was satisfied.
+    /// The evidence bar of the policy was satisfied.
     Convicted,
-    /// Evidence is present but insufficient.
-    EvidencePresent,
+    /// Evidence is present but does not satisfy the evidence bar.
+    InsufficientEvidence,
     /// Evidence existed but had expired.
     EvidenceExpired,
     /// Providers were consulted and reported nothing.

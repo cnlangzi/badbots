@@ -5,7 +5,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use badbots::provider::{LookupProvider, ProviderCapability, ProviderFinding};
+use badbots::provider::{LookupProvider, ProviderCapability, ProviderCost, ProviderFinding};
 use badbots::{
     BadBots, Config, CoverageLevel, ProviderError, ProviderId, SourceFamily, daily_guard,
 };
@@ -29,6 +29,10 @@ impl LookupProvider for SilentProvider {
 
     fn capability(&self) -> ProviderCapability {
         ProviderCapability::Primary
+    }
+
+    fn cost(&self) -> ProviderCost {
+        ProviderCost::Medium
     }
 
     async fn lookup(&self, _ip: IpAddr) -> Result<ProviderFinding, ProviderError> {
