@@ -196,9 +196,15 @@ pub struct Config {
     /// The timeout of a single provider request.
     #[serde(default = "default_request_timeout")]
     pub request_timeout: Duration,
+    /// How long a positive lookup result is reused.
+    #[serde(default = "default_positive_ttl")]
+    pub positive_ttl: Duration,
     /// How long a negative lookup result is reused.
     #[serde(default = "default_negative_ttl")]
     pub negative_ttl: Duration,
+    /// How long a failed lookup is remembered before the provider is asked again.
+    #[serde(default = "default_failure_ttl")]
+    pub failure_ttl: Duration,
     /// How prefix-scoped observations may carry the verdict.
     #[serde(default)]
     pub network_scope_policy: NetworkScopePolicy,
@@ -221,6 +227,14 @@ fn default_negative_ttl() -> Duration {
     Duration::from_secs(24 * 60 * 60)
 }
 
+fn default_positive_ttl() -> Duration {
+    Duration::from_secs(30 * 24 * 60 * 60)
+}
+
+fn default_failure_ttl() -> Duration {
+    Duration::from_secs(5 * 60)
+}
+
 fn default_max_concurrent_enrichments() -> usize {
     4
 }
@@ -238,7 +252,9 @@ impl Default for Config {
         Self {
             providers: ProviderConfig::default(),
             request_timeout: default_request_timeout(),
+            positive_ttl: default_positive_ttl(),
             negative_ttl: default_negative_ttl(),
+            failure_ttl: default_failure_ttl(),
             network_scope_policy: NetworkScopePolicy::default(),
             max_concurrent_enrichments: default_max_concurrent_enrichments(),
             cache_capacity: default_cache_capacity(),

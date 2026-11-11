@@ -15,7 +15,9 @@ fn the_default_configuration_carries_the_documented_values() {
     let config = Config::default();
 
     assert_eq!(config.request_timeout, Duration::from_secs(5));
+    assert_eq!(config.positive_ttl, Duration::from_secs(30 * 24 * 60 * 60));
     assert_eq!(config.negative_ttl, Duration::from_secs(24 * 60 * 60));
+    assert_eq!(config.failure_ttl, Duration::from_secs(5 * 60));
     assert_eq!(
         config.network_scope_policy,
         NetworkScopePolicy::CorroborateOnly

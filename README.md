@@ -86,7 +86,9 @@ nothing" from "never checked".
 
 A provider that fails never discards the evidence of another provider. The
 failure is recorded in `coverage.failed` and the verdict is computed from the
-evidence that was gathered.
+evidence that was gathered. A failed lookup is remembered for `failure_ttl`, so
+a provider that is unreachable is not asked again inside that window, and the
+remembered failure is reported in the coverage of the assessments that follow.
 
 A list provider is consulted about every address that is assessed. An address
 it produced an observation for is `definitive`, an address it did not match is
@@ -234,10 +236,19 @@ let bots = BadBots::builder().config(config).build()?;
 | Setting | Default |
 |---|---|
 | `request_timeout` | 5 s |
+| `positive_ttl` | 30 days |
 | `negative_ttl` | 24 h |
+| `failure_ttl` | 5 min |
 | `network_scope_policy` | `CorroborateOnly` |
 | `max_concurrent_enrichments` | 4 |
 | `cache_capacity` | 10,000 |
+
+The host bounds how long a cached result is reused. An answer that carries
+evidence is reused for at most `positive_ttl`, an answer that carries no
+evidence for at most `negative_ttl`, and a failed lookup is remembered for
+`failure_ttl`. A provider that declares an expiry of its own is asked again at
+the earlier of that expiry and the bound, so a bound can only shorten the
+reuse of a result, never extend it.
 
 ## Re-scoring stored evidence
 
