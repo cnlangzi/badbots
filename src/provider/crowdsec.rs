@@ -19,7 +19,7 @@ use crate::model::{
     SourceFamily, Suppression, ThreatCategory,
 };
 use crate::provider::lookup::{ProviderRuntime, parse_body};
-use crate::provider::{LookupProvider, ProviderCapability, ProviderVerdict};
+use crate::provider::{LookupProvider, ProviderCapability, ProviderFinding};
 use crate::secret::ApiKey;
 
 /// The number of days a positive result stays usable.
@@ -134,7 +134,7 @@ impl LookupProvider for CrowdSecProvider {
         ProviderCapability::Primary
     }
 
-    async fn lookup(&self, ip: IpAddr) -> Result<ProviderVerdict, ProviderError> {
+    async fn lookup(&self, ip: IpAddr) -> Result<ProviderFinding, ProviderError> {
         let now = self.runtime.clock().now();
         let url = format!("{}/smoke/{ip}", self.base_url.trim_end_matches('/'));
         let request = self
@@ -249,7 +249,7 @@ impl LookupProvider for CrowdSecProvider {
             .and_then(parse_timestamp);
 
         let Some(strength) = strength else {
-            return Ok(ProviderVerdict {
+            return Ok(ProviderFinding {
                 provider: ProviderId::CROWDSEC,
                 coverage: CoverageLevel::Definitive,
                 evidence: Vec::new(),
@@ -259,7 +259,7 @@ impl LookupProvider for CrowdSecProvider {
         };
 
         if suppressive_reputation {
-            return Ok(ProviderVerdict {
+            return Ok(ProviderFinding {
                 provider: ProviderId::CROWDSEC,
                 coverage: CoverageLevel::Definitive,
                 evidence: Vec::new(),
@@ -321,7 +321,7 @@ impl LookupProvider for CrowdSecProvider {
             upstream_values,
         };
 
-        Ok(ProviderVerdict {
+        Ok(ProviderFinding {
             provider: ProviderId::CROWDSEC,
             coverage: CoverageLevel::Definitive,
             evidence: vec![evidence],

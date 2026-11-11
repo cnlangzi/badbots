@@ -24,7 +24,7 @@ use crate::model::{
 use crate::provider::lookup::{ProviderRuntime, parse_body};
 use crate::provider::services::{SERVICES, assertion_of, category_of};
 use crate::provider::{
-    FeedProvider, FeedSnapshot, LookupProvider, ProviderCapability, ProviderVerdict,
+    FeedProvider, FeedSnapshot, LookupProvider, ProviderCapability, ProviderFinding,
 };
 
 /// The number of attack events an observation needs.
@@ -88,7 +88,7 @@ impl LookupProvider for BlocklistDeQueryProvider {
         ProviderCapability::Corroborating
     }
 
-    async fn lookup(&self, ip: IpAddr) -> Result<ProviderVerdict, ProviderError> {
+    async fn lookup(&self, ip: IpAddr) -> Result<ProviderFinding, ProviderError> {
         let now = self.runtime.clock().now();
         let start = now
             .checked_sub(time::Duration::seconds(seconds_of(self.window)))
@@ -119,7 +119,7 @@ impl LookupProvider for BlocklistDeQueryProvider {
         upstream_values.insert("reports".to_string(), reports.to_string());
 
         if attacks < MIN_ATTACK_EVENTS {
-            return Ok(ProviderVerdict {
+            return Ok(ProviderFinding {
                 provider: ProviderId::BLOCKLIST_DE,
                 coverage: CoverageLevel::Definitive,
                 evidence: Vec::new(),
@@ -146,7 +146,7 @@ impl LookupProvider for BlocklistDeQueryProvider {
             upstream_values,
         };
 
-        Ok(ProviderVerdict {
+        Ok(ProviderFinding {
             provider: ProviderId::BLOCKLIST_DE,
             coverage: CoverageLevel::Definitive,
             evidence: vec![evidence],

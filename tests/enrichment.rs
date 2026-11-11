@@ -267,7 +267,7 @@ async fn the_injected_clock_reaches_the_provider() {
     bots.enrich_ip(ip()).await;
 
     let statuses = bots.provider_status();
-    assert_eq!(statuses[0].budget_used, Some(1));
+    assert_eq!(statuses[0].quota_used, Some(1));
     assert_eq!(
         statuses[0].last_attempt,
         Some(clock.instant()),
@@ -319,8 +319,8 @@ async fn the_provider_health_is_reported() {
     assert!(statuses[0].last_attempt.is_some());
     assert!(statuses[0].last_success.is_some());
     assert!(statuses[0].last_error.is_none());
-    assert_eq!(statuses[0].budget_limit, Some(1_000));
-    assert_eq!(statuses[0].budget_used, Some(1));
+    assert_eq!(statuses[0].quota_limit, Some(1_000));
+    assert_eq!(statuses[0].quota_used, Some(1));
 }
 
 #[tokio::test]

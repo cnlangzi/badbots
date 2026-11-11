@@ -148,6 +148,43 @@ reproduced. The loaded list keeps them verbatim:
 let attribution = bots.feed_attribution(&badbots::ProviderId::SPAMHAUS);
 ```
 
+## Registering a provider
+
+A host with a source of threat intelligence of its own registers it with the
+library. The registration takes the quota of the provider and a factory that
+builds it:
+
+```rust
+let bots = BadBots::builder()
+    .config(config)
+    .lookup_provider(daily_guard(500), |runtime| {
+        Arc::new(InternalIntelProvider::new(runtime, "https://intel.internal/v1"))
+    })
+    .feed_provider(monthly_guard(10), |runtime| {
+        Arc::new(InternalListProvider::new(runtime))
+    })
+    .build()?;
+```
+
+The library builds the provider while it builds the library and hands it the
+runtime the provider performs its requests in: the HTTP client the host
+configured, the clock the host injected, the configured request timeout and the
+quota of the registration. A provider that brought its own runtime would answer
+with another clock, would not use the proxy and the certificate configuration of
+the host, and its quota would not appear in the provider status.
+
+A registered provider is consulted like every other provider: its answers are
+cached under its own provider id, its observations corroborate according to its
+own source family, and it appears in `provider_status()` with the quota it
+spends. The identifier of a registered provider has to be unique, because the
+cache is keyed by it: a build with two providers of the same id fails with
+`ConfigError::Invalid`.
+
+The engine takes the identity of a provider from the provider itself, so a
+finding cannot claim the identity of another provider. A host that wants its
+provider to count as one vote with a built-in provider reports the source family
+of that provider.
+
 ## Operator policy mapping
 
 The library decides how likely an address is; the host application decides what
