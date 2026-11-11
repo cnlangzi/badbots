@@ -27,10 +27,10 @@ GET https://api.blocklist.de/api.php?ip={ip}&start={unix}&end={unix}&format=json
 GET https://lists.blocklist.de/lists/{service}.txt
 ```
 
-The per-address query is part of `enrich_ip`:
+The per-address query is part of the verification of an address:
 
 ```rust
-let report = bots.enrich_ip(client_ip).await;
+let verdict = bots.verify_ip(client_ip).await;
 ```
 
 The per-service lists are part of `refresh_feeds`:
@@ -52,7 +52,7 @@ Both parts can be switched off separately through
 | The local minimum interval of the lists defaults to 30 minutes | Configuration default of this library |
 | The local budget guard allows 10,000 queries per day | Configuration default of this library |
 
-The query costs one request per enrichment per address. The budget is
+The query costs one request per verification per address. The budget is
 configurable through `BlocklistDeConfig::daily_quota`.
 
 ## Data scope

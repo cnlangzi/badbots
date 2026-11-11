@@ -22,7 +22,7 @@ fn the_default_configuration_carries_the_documented_values() {
         config.network_scope_policy,
         NetworkScopePolicy::CorroborateOnly
     );
-    assert_eq!(config.max_concurrent_enrichments, 4);
+    assert_eq!(config.max_concurrent_verifications, 4);
     assert_eq!(config.cache_capacity, 10_000);
 }
 

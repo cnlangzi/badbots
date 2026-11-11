@@ -69,14 +69,3 @@ pub enum ConfigError {
     #[error("invalid configuration: {0}")]
     Invalid(String),
 }
-
-/// Error returned by the library entry points.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum Error {
-    /// The configuration is invalid.
-    #[error(transparent)]
-    Config(#[from] ConfigError),
-    /// A provider failed.
-    #[error(transparent)]
-    Provider(#[from] ProviderError),
-}

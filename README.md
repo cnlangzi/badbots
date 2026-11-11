@@ -10,8 +10,14 @@ makes a specific, current, verifiable claim that it committed an attack. A false
 positive is far more costly than a false negative, so the design accepts short
 coverage rather than noisy verdicts.
 
-The library never blocks, bans or otherwise enforces a policy, and it never
-performs network I/O on the assessment path.
+The library never blocks, bans or otherwise enforces a policy, and it holds no
+allowlist of its own: an exemption is the host's own decision.
+
+The library answers two questions about an inbound request: is this client a
+bot, and is this address hostile. The host calls it when it has already
+detected attack behaviour. The bot question is free and may be asked on every
+request. The address question costs the quota of the upstream sources and is
+asked only when the host is already suspicious.
 
 ## Quickstart
 
@@ -29,11 +35,14 @@ let bots = BadBots::builder()
     .abuseipdb_api_key(std::env::var("BADBOTS_ABUSEIPDB_API_KEY").unwrap())
     .build()?;
 
-// The request path: no network I/O, answered from local state.
+// The bot question: free, synchronous, no provider involved.
+let bot = bots.assess_user_agent(Some(user_agent));
+
+// The address question: the local answer, and a verification in the background.
 let verdict = bots.assess_ip(client_ip);
 
-// The refresh path: explicit, asynchronous, costs upstream quota.
-let report = bots.enrich_ip(client_ip).await;
+// The address question: the answer of the upstream.
+let verdict = bots.verify_ip(client_ip).await;
 
 match verdict.classification {
     badbots::Classification::Bad => { /* the host decides what to do */ }
@@ -42,10 +51,50 @@ match verdict.classification {
 }
 ```
 
-`assess_ip` and `assess_request` are synchronous and answer from the local cache.
-`enrich_ip` and `refresh_feeds` are asynchronous and perform the upstream
-requests. The library creates no thread, no background task and no runtime of
-its own.
+## The entry points and what they cost
+
+| Entry point | Network I/O | Upstream quota | The caller |
+|---|---|---|---|
+| `assess_user_agent` | none | none | is not blocked |
+| `assess_ip` | none | none of its own; the verification it queues spends the quota of the providers it asks | is not blocked |
+| `verify_ip` | one request per consulted provider | one lookup per consulted provider | waits for the answer |
+| `refresh_feeds` | one request per list publisher | one download per list publisher | waits for the answer |
+
+## Getting an answer
+
+The host decides when to ask the library and what to do with the answer.
+
+```rust
+// Every request: the bot question.
+let bot = bots.assess_user_agent(Some(user_agent));
+
+// The host is already suspicious: the local answer.
+let verdict = bots.assess_ip(client_ip);
+
+// The host has to decide now: wait for the upstream.
+let verdict = bots.verify_ip(client_ip).await;
+```
+
+`assess_ip` answers from the local state: the answers that are cached, the
+failures that are remembered and the lists that are loaded. It performs no
+network I/O on the calling thread. When the answer is not `Bad`, it makes sure
+that a verification of the address runs, so that the answer of the next request
+is drawn from a fresher source. An address that cannot be assessed — a private,
+loopback or otherwise non-routable address — is never verified and never
+reaches an upstream, and a library without a lookup provider has nothing to
+verify.
+
+`verify_ip` waits for that verification. At most one verification runs for an
+address: a second caller waits for the running one instead of starting another.
+The answers and the failures of a verification are remembered, so the next
+assessment of the address reports them without another request.
+
+The upstream requests of a verification run on a worker thread that belongs to
+the library, on a runtime that belongs to the library. The runtime of the host
+is never used for them, and the thread of the caller is never blocked by them.
+The worker starts with the first verification and stops when the last handle of
+the library is dropped, so a host that only asks the bot question pays for
+nothing.
 
 ## The three verdicts
 
@@ -111,6 +160,23 @@ enabled in the configuration but whose feature is absent is reported as
 
 The `full` feature enables every provider the crate ships.
 
+### The order of the providers
+
+A verification spends the quota of as few providers as it can:
+
+1. The loaded lists are merged first. They are local and free, and their
+   findings can complete a corroboration without spending any quota.
+2. The Primary providers are asked one at a time. A Primary provider may
+   convict on its own, which makes every later request unnecessary, so the
+   sequence ends as soon as the findings satisfy the conviction rule.
+3. The providers that cannot convict on their own are asked together, because
+   asking them one at a time would only add latency. The phase waits for every
+   provider it asked: the quota of a request is spent when the request is sent,
+   so an abandoned request would spend quota and lose the answer.
+
+An assessment composes its verdict in the same order and stops at the same
+point, so the coverage it reports is the coverage a verification would report.
+
 ## The list providers
 
 Three of the providers publish a list instead of answering about one address:
@@ -145,7 +211,7 @@ The publisher of a list may ask for its credit and its terms to be
 reproduced. The loaded list keeps them verbatim:
 
 ```rust
-let attribution = bots.feed_attribution(&badbots::ProviderId::SPAMHAUS);
+let attribution = bots.feed_attribution(badbots::ProviderId::SPAMHAUS);
 ```
 
 ## Registering a provider
@@ -173,12 +239,12 @@ quota of the registration. A provider that brought its own runtime would answer
 with another clock, would not use the proxy and the certificate configuration of
 the host, and its quota would not appear in the provider status.
 
-A registered provider is consulted like every other provider: its answers are
-cached under its own provider id, its observations corroborate according to its
-own source family, and it appears in `provider_status()` with the quota it
-spends. The identifier of a registered provider has to be unique, because the
-cache is keyed by it: a build with two providers of the same id fails with
-`ConfigError::Invalid`.
+A registered provider is consulted like every other provider: its requests run
+on the worker thread of the library, its answers are cached under its own
+provider id, its observations corroborate according to its own source family,
+and it appears in `provider_status()` with the quota it spends. The identifier
+of a registered provider has to be unique, because the cache is keyed by it: a
+build with two providers of the same id fails with `ConfigError::Invalid`.
 
 The engine takes the identity of a provider from the provider itself, so a
 finding cannot claim the identity of another provider. A host that wants its
@@ -206,18 +272,42 @@ verdict.
 
 ## The user-agent dimension
 
-`assess_request` also reports whether the request looks like it came from a bot:
+`assess_user_agent` reports whether the request looks like it came from a bot:
 
 ```rust
-let request = bots.assess_request(client_ip, Some(user_agent));
-request.ip;    // the address verdict
-request.bot;   // is_bot, the syntactic state, the claimed family
+let bot = bots.assess_user_agent(Some(user_agent));
+bot.is_bot;             // whether the client is a bot
+bot.ua_state;           // the syntactic state of the header
+bot.claimed_family;     // the family the user agent claims
 ```
+
+The call performs no network I/O, spends no quota and touches no cache, so it
+may be made on every request.
 
 The two dimensions are independent: a user agent never changes the address
 verdict, and the address verdict never changes the user-agent verdict. A user
 agent that claims to be a well-known crawler is never treated as verified. The
 library performs no ownership verification and no reverse-DNS lookup.
+
+## Deployment
+
+The library runs inside the process of the host, and everything it keeps lives
+in that process:
+
+| State | Where it lives | What bounds it |
+|---|---|---|
+| The quota guard | the process of the host | the quota of the provider |
+| The lookup cache | the process of the host | `cache_capacity` and the TTLs of the host |
+| The loaded lists | the process of the host | the refresh interval of the publisher |
+| The refresh interval | the process of the host | the interval the publisher states |
+
+Two processes therefore keep two quotas, two caches and two sets of lists. A
+host that runs more than one process has to divide the quota of a provider
+between its processes, or route the assessments of an address to one of them.
+
+The worker thread of the library belongs to that process as well: it is started
+by the first verification and stopped with the last handle of the library, so
+the process is never held open by it.
 
 ## Expected coverage
 
@@ -243,7 +333,7 @@ that needs more coverage adds a provider rather than loosening the rules.
 
 ## Staged rollout
 
-1. **Observe only.** Enable the providers, call `enrich_ip` off the request
+1. **Observe only.** Enable the providers, call `verify_ip` off the request
    path, and record the verdicts. Do not enforce anything. Measure how many
    addresses are classified `Bad` and how many are `Suspect`.
 2. **Sample the false positives.** Take the `Bad` addresses and check them
@@ -277,7 +367,7 @@ let bots = BadBots::builder().config(config).build()?;
 | `negative_ttl` | 24 h |
 | `failure_ttl` | 5 min |
 | `network_scope_policy` | `CorroborateOnly` |
-| `max_concurrent_enrichments` | 4 |
+| `max_concurrent_verifications` | 4 |
 | `cache_capacity` | 10,000 |
 
 The host bounds how long a cached result is reused. An answer that carries
@@ -286,6 +376,10 @@ evidence for at most `negative_ttl`, and a failed lookup is remembered for
 `failure_ttl`. A provider that declares an expiry of its own is asked again at
 the earlier of that expiry and the bound, so a bound can only shorten the
 reuse of a result, never extend it.
+
+`max_concurrent_verifications` bounds how many verifications run at the same
+time on the worker. The bound keeps a burst of assessments from spending the
+quota of a provider faster than the quota allows.
 
 ## Re-scoring stored evidence
 

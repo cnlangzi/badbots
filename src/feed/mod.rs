@@ -67,8 +67,8 @@ pub struct LoadedFeeds {
 
 impl LoadedFeeds {
     /// The feed of a provider.
-    pub fn get(&self, provider: &ProviderId) -> Option<&LoadedFeed> {
-        self.feeds.get(provider).map(|feed| feed.as_ref())
+    pub fn get(&self, provider: ProviderId) -> Option<&LoadedFeed> {
+        self.feeds.get(&provider).map(|feed| feed.as_ref())
     }
 
     /// Installs a feed, replacing the previous one of the provider.

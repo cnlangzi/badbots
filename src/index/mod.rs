@@ -5,4 +5,4 @@
 
 pub mod ip_index;
 
-pub use ip_index::{ADDRESS_KEY, IpIndex};
+pub use ip_index::IpIndex;

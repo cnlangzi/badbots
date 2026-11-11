@@ -6,8 +6,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::classification::IpVerdict;
-
 /// The syntactic state of a user-agent header.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -43,15 +41,6 @@ pub struct BotVerdict {
     pub claimed_family: Option<String>,
     /// The markers that matched.
     pub matched_markers: Vec<String>,
-}
-
-/// The verdict for one request.
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub struct RequestVerdict {
-    /// The verdict for the source address.
-    pub ip: IpVerdict,
-    /// The verdict for the user agent.
-    pub bot: BotVerdict,
 }
 
 /// The marker lists used to classify a user agent.
