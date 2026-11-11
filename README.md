@@ -1,5 +1,8 @@
 # badbots
 
+[![crates.io](https://img.shields.io/crates/v/badbots.svg)](https://crates.io/crates/badbots)
+[![docs.rs](https://img.shields.io/docsrs/badbots.svg)](https://docs.rs/badbots)
+
 `badbots` is a Rust library that assesses how likely an inbound request's source
 IP address is to be hostile. Its users are web applications, reverse proxies,
 WAFs and CDNs that need a decision plus the evidence behind it, and that then

@@ -6,6 +6,7 @@ rust-version = "1.96"
 license = "MIT"
 description = "Evidence-based IP badness assessment for inbound traffic"
 repository = "https://github.com/cnlangzi/badbots"
+documentation = "https://docs.rs/badbots"
 readme = "README.md"
 keywords = ["security", "ip", "reputation", "abuse", "bot"]
 categories = ["security"]

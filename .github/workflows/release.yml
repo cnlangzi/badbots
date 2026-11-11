@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read the release version
+        id: version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check the manifest version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          manifest=$(sed -n -E 's|^version = "(.*)"$|\1|p' Cargo.toml | head -1)
+          if [ "$manifest" != "$VERSION" ]; then
+            echo "::error::Cargo.toml carries $manifest but the release carries $VERSION"
+            exit 1
+          fi
+
+      - name: Check the formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test --all-features
+
+      - name: Look the version up on crates.io
+        id: registry
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          status=$(curl -s -o /dev/null -w '%{http_code}' -H 'User-Agent: badbots-release' "https://crates.io/api/v1/crates/badbots/$VERSION" || true)
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      - name: Report the published version
+        if: steps.registry.outputs.status == '200'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: echo "badbots $VERSION is already published on crates.io, skipping the upload"
+
+      - name: Publish to crates.io
+        if: steps.registry.outputs.status != '200'
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
