@@ -495,7 +495,7 @@ async fn an_unlimited_quota_never_refuses_a_registered_provider() {
 
     let bots = BadBots::builder()
         .clock(Arc::new(TestClock::new(now())))
-        .lookup_provider(QuotaGuard::unlimited(), move |runtime| {
+        .lookup_provider(Arc::new(QuotaGuard::unlimited()), move |runtime| {
             let mut provider = internal(runtime, "internal", "internal");
             provider.endpoint = Some(endpoint.clone());
             provider
@@ -515,7 +515,7 @@ async fn an_unlimited_quota_never_refuses_a_registered_provider() {
 
 #[test]
 fn a_provider_is_built_with_the_quota_guard_of_the_crate_root() {
-    let quota = QuotaGuard::new(10, QuotaWindow::Day);
+    let quota = Arc::new(QuotaGuard::new(10, QuotaWindow::Day));
     let bots = BadBots::builder()
         .clock(Arc::new(TestClock::new(now())))
         .lookup_provider(quota, |runtime| internal(runtime, "internal", "internal"))

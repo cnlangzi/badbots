@@ -9,12 +9,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use badbots::provider::abuseipdb::AbuseIpdbProvider;
-use badbots::provider::lookup::{ProviderRuntime, daily_guard};
+use badbots::provider::lookup::ProviderRuntime;
 use badbots::provider::{LookupProvider, ProviderCapability};
 use badbots::{
     AbuseIpdbConfig, ApiKey, Assertion, BadBots, Classification, Config, CoverageLevel,
     EvidencePolicy, EvidenceStrength, ProviderConfig, ProviderError, ProviderId, SourceFamily,
-    Suppression, VerdictReason,
+    Suppression, VerdictReason, daily_guard,
 };
 use common::{fixture, render};
 use time::OffsetDateTime;

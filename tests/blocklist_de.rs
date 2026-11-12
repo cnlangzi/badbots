@@ -10,12 +10,12 @@ use std::time::Duration;
 use badbots::provider::blocklist_de::{
     BlocklistDeListProvider, BlocklistDeQueryProvider, MIN_ATTACK_EVENTS,
 };
-use badbots::provider::lookup::{ProviderRuntime, daily_guard};
+use badbots::provider::lookup::ProviderRuntime;
 use badbots::provider::services::SERVICES;
 use badbots::provider::{FeedProvider, LookupProvider, ProviderCapability};
 use badbots::{
     Assertion, EvidenceStrength, MatchScope, ProviderError, ProviderId, SourceFamily,
-    ThreatCategory,
+    ThreatCategory, daily_guard,
 };
 use common::{TestClock, fixture, fixture_bytes};
 use time::{OffsetDateTime, macros::datetime};
