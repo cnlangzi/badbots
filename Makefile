@@ -39,7 +39,7 @@ release:
 			200) echo "crates.io already carries badbots $(VERSION)" >&2; exit 1 ;; \
 			*) echo "cannot tell whether crates.io carries badbots $(VERSION) (HTTP $$status)" >&2; exit 1 ;; \
 		esac
-	@$(MAKE) fmt-check lint test
+	@$(MAKE) fmt-check lint test doc
 	@git commit --allow-empty -m "chore(release): $(VERSION)"
 	@git tag -a "v$(VERSION)" -m "badbots $(VERSION)"
 	@git push --atomic origin HEAD:main "v$(VERSION)"

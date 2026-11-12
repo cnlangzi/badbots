@@ -65,9 +65,8 @@
 //!
 //! # Enabling a provider
 //!
-//! A provider is enabled in the configuration, and its crate feature has to be
-//! compiled in. The builder method enables the provider and the key method
-//! supplies the credential it needs:
+//! The builder method enables the provider and the key method supplies the
+//! credential it needs:
 //!
 //! ```
 //! # #[cfg(feature = "abuseipdb")]
@@ -84,7 +83,7 @@
 //! ```
 //!
 //! Without the `abuseipdb` crate feature the provider is not compiled in, and
-//! the build of the library fails with `ConfigError::MissingFeature`.
+//! the build of the library fails with [`ConfigError::MissingFeature`].
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
