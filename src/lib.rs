@@ -507,9 +507,9 @@ impl BadBots {
 
     /// Classifies an address from the local state.
     ///
-    /// The call performs no network I/O: it answers from the answers that are
-    /// already cached, from the failures that are already remembered and from
-    /// the lists that are already loaded.
+    /// The call performs no network I/O on the calling thread: it answers from
+    /// the answers that are already cached, from the failures that are already
+    /// remembered and from the lists that are already loaded.
     ///
     /// The assessment is composed in the order the policy asks the providers
     /// in, and it stops reading as soon as the findings satisfy the evidence

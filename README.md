@@ -25,6 +25,41 @@ detected attack behaviour. The bot question is free and may be asked on every
 request. The address question costs the quota of the upstream sources and is
 asked only when the host is already suspicious.
 
+## The usage scenario
+
+The library is a second opinion, not a filter. A host that has already seen
+attack behaviour calls the library to find out whether an independent source
+agrees, and the host then applies its own policy to the answer.
+
+The call belongs off the request path. The request that revealed the behaviour
+is neither delayed nor blocked by the library: the host lets it proceed the way
+its own policy allows, the verification of the address runs in the background,
+the answer is there for the next request that comes from the same address, and
+the host reads it with the same call that asked for it.
+
+1. The host detects behaviour it does not like and lets the request proceed.
+2. The host asks the library about the address. `assess_ip` answers from the
+   local state and makes sure that a verification of the address runs, and
+   `verify_ip` waits for that verification. An assessment that is already `Bad`
+   needs no verification.
+3. The verification asks the providers in the order the policy prescribes and
+   the answer is remembered, so a later assessment of the same address reports
+   it without another request.
+4. The host reads the verdict on the next request from that address and acts
+   on it. `Bad` means that an independent source agrees with the host's own
+   suspicion; `Unknown` means that no conviction was reached.
+
+The evidence policy is the second decision the host makes, and it decides what
+a `Bad` verdict is worth. A host that treats the verdict as an independent
+claim and pays for a false positive chooses the strict policy; a host that has
+already decided to treat the client as hostile and asks the library for
+corroboration chooses the lenient policy, where any report of doubt is enough.
+See [The two policies](#the-two-policies).
+
+The library is not a hot-path filter. A host that asks it about every address
+spends the quota of its providers on clients it never suspected, and the one
+call that is free and may be made on every request is `assess_user_agent`.
+
 ## Quickstart
 
 ```sh
@@ -72,10 +107,10 @@ The host decides when to ask the library and what to do with the answer.
 // Every request: the bot question.
 let bot = bots.assess_user_agent(Some(user_agent));
 
-// The host is already suspicious: the local answer.
+// The host is already suspicious: the local answer, and a verification in the background.
 let verdict = bots.assess_ip(client_ip);
 
-// The host has to decide now: wait for the upstream.
+// The host wants the upstream answer now: wait for it.
 let verdict = bots.verify_ip(client_ip).await;
 ```
 
