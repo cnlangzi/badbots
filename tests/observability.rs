@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::net::IpAddr;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -127,24 +127,14 @@ fn snapshot(provider: &ProviderId) -> FeedSnapshot {
 }
 
 /// A library that asks the given provider about an address.
-fn bots_with(provider: ProviderId) -> BadBots {
+///
+/// The provider fails when a failure is given.
+fn bots_with(provider: ProviderId, failure: Option<ProviderError>) -> BadBots {
     BadBots::builder()
         .config(Config::default())
         .lookup_provider(daily_guard(100), move |_runtime| ScriptedProvider {
             id: provider,
-            failure: None,
-        })
-        .build()
-        .expect("the library is built")
-}
-
-/// A library whose provider fails to answer.
-fn bots_with_failing_provider(provider: ProviderId) -> BadBots {
-    BadBots::builder()
-        .config(Config::default())
-        .lookup_provider(daily_guard(100), move |_runtime| ScriptedProvider {
-            id: provider,
-            failure: Some(ProviderError::Timeout),
+            failure,
         })
         .build()
         .expect("the library is built")
@@ -161,8 +151,8 @@ fn bots_with_list(list: ScriptedList) -> BadBots {
 
 #[tokio::test]
 async fn a_queued_verification_is_reported() {
-    subscribe();
-    let bots = bots_with(ProviderId::new("queued"));
+    let _guard = lock().await;
+    let bots = bots_with(ProviderId::new("queued"), None);
 
     bots.verify_ip(address("45.32.1.1")).await;
 
@@ -177,9 +167,9 @@ async fn a_queued_verification_is_reported() {
 
 #[tokio::test]
 async fn a_provider_that_answers_is_reported() {
-    subscribe();
+    let _guard = lock().await;
     let provider = ProviderId::new("answered");
-    let bots = bots_with(provider.clone());
+    let bots = bots_with(provider.clone(), None);
 
     bots.verify_ip(address("45.32.2.2")).await;
 
@@ -191,9 +181,9 @@ async fn a_provider_that_answers_is_reported() {
 
 #[tokio::test]
 async fn a_provider_that_fails_is_reported() {
-    subscribe();
+    let _guard = lock().await;
     let provider = ProviderId::new("failed");
-    let bots = bots_with_failing_provider(provider.clone());
+    let bots = bots_with(provider.clone(), Some(ProviderError::Timeout));
 
     bots.verify_ip(address("45.32.3.3")).await;
 
@@ -205,13 +195,14 @@ async fn a_provider_that_fails_is_reported() {
     .expect("the failure of the provider is reported");
     assert_eq!(event.level, tracing::Level::WARN);
     assert_eq!(event.field("provider"), Some(provider.as_str()));
-    assert_eq!(event.field("error"), Some("provider request timed out"));
+    let expected = ProviderError::Timeout.to_string();
+    assert_eq!(event.field("error"), Some(expected.as_str()));
 }
 
 #[tokio::test]
 async fn a_finished_verification_is_reported() {
-    subscribe();
-    let bots = bots_with(ProviderId::new("finished"));
+    let _guard = lock().await;
+    let bots = bots_with(ProviderId::new("finished"), None);
 
     let verdict = bots.verify_ip(address("45.32.4.4")).await;
 
@@ -234,7 +225,7 @@ async fn a_finished_verification_is_reported() {
 
 #[tokio::test]
 async fn a_refreshed_list_is_reported() {
-    subscribe();
+    let _guard = lock().await;
     let provider = ProviderId::new("refreshed");
     let bots = bots_with_list(ScriptedList {
         id: provider.clone(),
@@ -252,7 +243,7 @@ async fn a_refreshed_list_is_reported() {
 
 #[tokio::test]
 async fn a_list_that_cannot_be_refreshed_is_reported() {
-    subscribe();
+    let _guard = lock().await;
     let provider = ProviderId::new("unrefreshed");
     let bots = bots_with_list(ScriptedList {
         id: provider.clone(),
@@ -269,12 +260,13 @@ async fn a_list_that_cannot_be_refreshed_is_reported() {
     )
     .expect("the failed refresh is reported");
     assert_eq!(event.level, tracing::Level::WARN);
-    assert_eq!(event.field("error"), Some("provider returned status 500"));
+    let expected = ProviderError::Status { code: 500 }.to_string();
+    assert_eq!(event.field("error"), Some(expected.as_str()));
 }
 
 #[tokio::test]
 async fn a_list_that_is_refreshed_too_early_is_reported() {
-    subscribe();
+    let _guard = lock().await;
     let provider = ProviderId::new("early");
     let bots = bots_with_list(ScriptedList {
         id: provider.clone(),
@@ -322,6 +314,12 @@ impl Event {
 /// The events the library reported.
 static EVENTS: OnceLock<Arc<Mutex<Vec<Event>>>> = OnceLock::new();
 
+/// The lock that keeps the tests apart.
+///
+/// The subscriber that records the events is global, so a test reads the
+/// events of the tests that ran before it unless they are cleared.
+static LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
+
 /// Installs the subscriber that records the events of the library.
 ///
 /// The subscriber is global, so that the events of the worker thread are
@@ -332,6 +330,26 @@ fn subscribe() {
         let _ = tracing::subscriber::set_global_default(Subscriber(Arc::clone(&events)));
         events
     });
+}
+
+/// Takes the lock of the tests and clears the events that were recorded.
+///
+/// The guard keeps the other tests out until the test that holds it is done.
+async fn lock() -> tokio::sync::MutexGuard<'static, ()> {
+    subscribe();
+    let guard = LOCK.lock().await;
+    clear();
+    guard
+}
+
+/// Forgets the events that were recorded.
+fn clear() {
+    EVENTS
+        .get()
+        .expect("the subscriber is installed")
+        .lock()
+        .expect("the lock is held")
+        .clear();
 }
 
 /// The event with the given message that carries the given value.
