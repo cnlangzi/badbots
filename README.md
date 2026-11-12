@@ -27,9 +27,8 @@ asked only when the host is already suspicious.
 
 ## Quickstart
 
-```toml
-[dependencies]
-badbots = { version = "0.2", features = ["full"] }
+```sh
+cargo add badbots --features full
 ```
 
 ```rust

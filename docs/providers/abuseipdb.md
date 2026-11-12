@@ -8,9 +8,8 @@ upstream has reports about it and how strongly the community reports it.
 1. Create an account at `abuseipdb.com` and request an API key.
 2. Enable the crate feature:
 
-   ```toml
-   [dependencies]
-   badbots = { version = "0.2", features = ["abuseipdb"] }
+   ```sh
+   cargo add badbots --features abuseipdb
    ```
 
 3. Enable the provider and supply the key:

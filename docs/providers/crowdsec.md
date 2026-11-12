@@ -8,9 +8,8 @@ the behaviors the upstream observed and the classifications it assigned.
 1. Create an account at `console.crowdsec.net` and request a CTI API key.
 2. Enable the crate feature:
 
-   ```toml
-   [dependencies]
-   badbots = { version = "0.2", features = ["crowdsec"] }
+   ```sh
+   cargo add badbots --features crowdsec
    ```
 
 3. Enable the provider and supply the key:

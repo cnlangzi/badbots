@@ -182,6 +182,11 @@ pub struct DShieldConfig {
 }
 
 /// The configuration of every supported provider.
+///
+/// A provider is only compiled in by its own crate feature. A provider that is
+/// enabled here but whose feature was not compiled in makes the build of the
+/// library fail with
+/// [`ConfigError::MissingFeature`](crate::ConfigError::MissingFeature).
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub struct ProviderConfig {
     /// The AbuseIPDB check provider.
