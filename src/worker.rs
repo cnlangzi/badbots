@@ -105,6 +105,7 @@ impl Worker {
     /// the local state, so that the caller that waits for it is not left
     /// waiting.
     pub(crate) fn enqueue(&self, job: Job) {
+        let ip = job.ip;
         let refused = {
             let mut state = lock(&self.state);
             if state.thread.is_none() {
@@ -122,6 +123,8 @@ impl Worker {
             let verdict = self.shared.compose(job.ip, self.shared.clock.now());
             forget_running(&self.shared, job.ip, &job.verification);
             job.verification.complete(verdict);
+        } else {
+            tracing::debug!(ip = %ip, "a verification of the address was queued");
         }
     }
 
@@ -265,6 +268,12 @@ impl Drop for Completion {
 async fn verify(shared: &Arc<Shared>, ip: IpAddr, verification: Arc<Verification>) {
     let verdict = assess(shared, ip).await;
     forget_running(shared, ip, &verification);
+    tracing::info!(
+        ip = %ip,
+        classification = ?verdict.classification,
+        reason = ?verdict.reason,
+        "the verification of the address finished"
+    );
     verification.complete(verdict);
 }
 
@@ -377,8 +386,23 @@ async fn ask(
 
     shared.record_attempt(provider.id(), now);
     match &answer {
-        Ok(_) => shared.record_success(provider.id(), now),
-        Err(error) => shared.record_failure(provider.id(), now, error.clone()),
+        Ok(_) => {
+            shared.record_success(provider.id(), now);
+            tracing::debug!(
+                provider = %provider.id(),
+                ip = %ip,
+                "the provider answered about the address"
+            );
+        }
+        Err(error) => {
+            shared.record_failure(provider.id(), now, error.clone());
+            tracing::warn!(
+                provider = %provider.id(),
+                ip = %ip,
+                %error,
+                "the provider did not answer about the address"
+            );
+        }
     }
 
     answer

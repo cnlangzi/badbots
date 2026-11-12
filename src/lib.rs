@@ -584,6 +584,11 @@ impl BadBots {
 
         for (position, provider) in shared.feed_providers.iter().enumerate() {
             if let Some(remaining) = shared.refresh_remaining(provider.as_ref(), now) {
+                tracing::debug!(
+                    provider = %provider.id(),
+                    remaining = ?remaining,
+                    "the list was not refreshed because its interval has not elapsed"
+                );
                 skipped.push((
                     position,
                     FeedRefreshResult {
@@ -613,8 +618,20 @@ impl BadBots {
                 Ok(snapshot) => {
                     shared.record_success(id.clone(), now);
                     shared.install(id.clone(), snapshot.clone());
+                    tracing::info!(
+                        provider = %id,
+                        entries = snapshot.entries.len(),
+                        "the list was refreshed"
+                    );
                 }
-                Err(error) => shared.record_failure(id.clone(), now, error.clone()),
+                Err(error) => {
+                    shared.record_failure(id.clone(), now, error.clone());
+                    tracing::warn!(
+                        provider = %id,
+                        %error,
+                        "the list could not be refreshed"
+                    );
+                }
             }
 
             results.push((
