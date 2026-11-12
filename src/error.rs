@@ -43,9 +43,6 @@ pub enum ProviderError {
     /// The local budget guard for the current window is used up.
     #[error("provider quota exhausted")]
     QuotaExhausted,
-    /// The address cannot be assessed by this provider.
-    #[error("address is not supported: {0}")]
-    UnsupportedAddress(String),
 }
 
 /// Configuration problem detected while building the library.
