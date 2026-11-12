@@ -355,6 +355,34 @@ verdict, and the address verdict never changes the user-agent verdict. A user
 agent that claims to be a well-known crawler is never treated as verified. The
 library performs no ownership verification and no reverse-DNS lookup.
 
+## Observability
+
+The library reports what it does through `tracing`, which the crate depends on
+already. A host that installs a subscriber sees the events; a host that installs
+none sees none of them, and the verdicts are the same either way.
+
+| Event | Level | Trigger | Fields |
+|---|---|---|---|
+| `a verification of the address was queued` | `debug` | The worker takes a verification of an address on. | the address |
+| `the provider answered about the address` | `debug` | A provider answers about an address. | the provider, the address |
+| `the provider did not answer about the address` | `warn` | A provider fails, times out or runs out of budget. | the provider, the address, the error |
+| `the verification of the address finished` | `info` | A verification produced a verdict. | the address, the classification, the reason |
+| `the list was not refreshed because its interval has not elapsed` | `debug` | A refresh finds a publisher that was asked too recently. | the provider, the time that is left |
+| `the list was refreshed` | `info` | A publisher published a list that was downloaded. | the provider, the number of entries |
+| `the list could not be refreshed` | `warn` | The download of a list failed. | the provider, the error |
+
+The library reports its own failures at the level `error`: a verification that
+could not be queued for the worker, a worker thread that could not be started,
+a verification of the worker that failed, a runtime of the worker that could
+not be built, and a verification of an address that did not finish. It reports
+the problems of the data it receives at the level `warn`: an observation about
+an exact address that does not record its address. A budget that the library
+does not spend is reported at the level `warn` as well, because it is not
+applied.
+
+The library keeps no counters of its own: the numbers a host needs are the ones
+it derives from the verdicts it receives.
+
 ## Deployment
 
 The library runs inside the process of the host, and everything it keeps lives
