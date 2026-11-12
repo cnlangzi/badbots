@@ -392,29 +392,45 @@ of the provider. The instant a method of the trait takes is a
 depends on it the way it already does for those types.
 
 ```rust
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use badbots::{BadBots, Config, ProviderId, Quota};
-use time::OffsetDateTime;
+use time::{Date, OffsetDateTime};
 
-/// The budget of an upstream key, counted in a store the processes share.
+/// The budget of an upstream key, counted per calendar day in a store the
+/// processes of the host share.
 struct SharedBudget {
-    spent: std::sync::Mutex<u32>,
+    counter: Mutex<(Option<Date>, u32)>,
     limit: u32,
+}
+
+impl SharedBudget {
+    /// The counter of the day the instant falls in.
+    ///
+    /// The window is the one the implementation chooses, so a new day resets
+    /// the counter.
+    fn counter(&self, now: OffsetDateTime) -> MutexGuard<'_, (Option<Date>, u32)> {
+        let day = now.date();
+        let mut counter = self.counter.lock().unwrap();
+        if counter.0 != Some(day) {
+            *counter = (Some(day), 0);
+        }
+        counter
+    }
 }
 
 impl Quota for SharedBudget {
     fn try_consume(&self, now: OffsetDateTime) -> bool {
-        let mut spent = self.spent.lock().unwrap();
-        if *spent >= self.limit {
+        let mut counter = self.counter(now);
+        if counter.1 >= self.limit {
             return false;
         }
-        *spent += 1;
+        counter.1 += 1;
         true
     }
 
     fn used(&self, now: OffsetDateTime) -> u32 {
-        *self.spent.lock().unwrap()
+        self.counter(now).1
     }
 
     fn bounded_limit(&self) -> Option<u32> {
@@ -424,21 +440,34 @@ impl Quota for SharedBudget {
 
 let bots = BadBots::builder()
     .config(Config::default())
+    .enable_abuseipdb()
+    .abuseipdb_api_key("your-api-key")
     .quota(
         ProviderId::ABUSEIPDB,
         Arc::new(SharedBudget {
-            spent: std::sync::Mutex::new(0),
+            counter: Mutex::new((None, 0)),
             limit: 500,
         }),
     )
     .build()?;
 ```
 
+The provider is named by its identifier: `ProviderId::ABUSEIPDB`,
+`ProviderId::CROWDSEC`, `ProviderId::BLOCKLIST_DE`,
+`ProviderId::BLOCKLIST_DE_LISTS`, `ProviderId::SPAMHAUS` and
+`ProviderId::DSHIELD`. The per-address query and the service lists of
+Blocklist.de are two providers with two budgets, so a budget for
+`ProviderId::BLOCKLIST_DE` does not bound the lists of
+`ProviderId::BLOCKLIST_DE_LISTS`.
+
 The budget replaces the one the configuration describes: the `daily_quota` of
 AbuseIPDB and of Blocklist.de, the `monthly_quota` of CrowdSec and the default
 budget of the list providers are ignored for that provider. The budget of a
 provider the host registers is the one the registration carries; the budget of
-the builder does not reach it.
+the builder does not reach it. A budget that the library does not spend — the
+budget of a provider the configuration disables, of an identifier the crate
+does not know, or of a provider the host registers with a budget of its own —
+is not applied, and the library warns about it.
 
 A budget that refuses a lookup ends in `ProviderError::QuotaExhausted`: the
 provider is recorded in `coverage.failed` and the verdict is computed from the

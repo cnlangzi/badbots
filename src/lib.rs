@@ -849,7 +849,7 @@ pub struct BadBotsBuilder {
     client: Option<reqwest::Client>,
     clock: Option<Arc<dyn Clock>>,
     markers: Option<UserAgentMarkers>,
-    quotas: HashMap<ProviderId, Arc<dyn Quota>>,
+    budgets: HashMap<ProviderId, Arc<dyn Quota>>,
     lookup_registrations: Vec<LookupRegistration>,
     feed_registrations: Vec<FeedRegistration>,
 }
@@ -1042,10 +1042,24 @@ impl BadBotsBuilder {
 
     /// Sets the budget of a provider the crate ships.
     ///
+    /// The provider is named by its identifier: [`ProviderId::ABUSEIPDB`],
+    /// [`ProviderId::CROWDSEC`], [`ProviderId::BLOCKLIST_DE`],
+    /// [`ProviderId::BLOCKLIST_DE_LISTS`], [`ProviderId::SPAMHAUS`] and
+    /// [`ProviderId::DSHIELD`]. The per-address query and the service lists of
+    /// Blocklist.de are two providers with two budgets, so a budget for
+    /// [`ProviderId::BLOCKLIST_DE`] does not bound the lists of
+    /// [`ProviderId::BLOCKLIST_DE_LISTS`].
+    ///
     /// The budget replaces the one the configuration describes: the
     /// `daily_quota` of AbuseIPDB and of Blocklist.de, the `monthly_quota` of
     /// CrowdSec and the default budget of the list providers are ignored for
     /// that provider.
+    ///
+    /// A budget for a provider that the library does not spend — a provider the
+    /// configuration disables, a provider whose crate feature was not compiled
+    /// in, an identifier the crate does not know, or a provider the host
+    /// registers with a budget of its own — is not applied, and the library
+    /// warns about it.
     ///
     /// The budget of an upstream key belongs to every process that spends it, so
     /// a host that runs the library in more than one process and shares one key
@@ -1054,49 +1068,72 @@ impl BadBotsBuilder {
     /// method does not reach it.
     ///
     /// ```
-    /// use std::sync::Arc;
+    /// # #[cfg(feature = "abuseipdb")]
+    /// # {
+    /// use std::sync::{Arc, Mutex, MutexGuard};
     ///
     /// use badbots::{BadBots, Config, ProviderId, Quota};
-    /// use time::OffsetDateTime;
+    /// use time::{Date, OffsetDateTime};
     ///
-    /// /// A budget the host keeps in a store its processes share.
+    /// /// The budget of an upstream key, counted per calendar day in a store
+    /// /// the processes of the host share.
     /// struct SharedBudget {
-    ///     spent: std::sync::Mutex<u32>,
+    ///     counter: Mutex<(Option<Date>, u32)>,
+    ///     limit: u32,
+    /// }
+    ///
+    /// impl SharedBudget {
+    ///     /// The counter of the day the instant falls in.
+    ///     ///
+    ///     /// The window is the one the implementation chooses, so a new day
+    ///     /// resets the counter.
+    ///     fn counter(&self, now: OffsetDateTime) -> MutexGuard<'_, (Option<Date>, u32)> {
+    ///         let day = now.date();
+    ///         let mut counter = self.counter.lock().expect("the lock is held");
+    ///         if counter.0 != Some(day) {
+    ///             *counter = (Some(day), 0);
+    ///         }
+    ///         counter
+    ///     }
     /// }
     ///
     /// impl Quota for SharedBudget {
     ///     fn try_consume(&self, now: OffsetDateTime) -> bool {
-    ///         let mut spent = self.spent.lock().expect("the lock is held");
-    ///         if *spent >= 500 {
+    ///         let mut counter = self.counter(now);
+    ///         if counter.1 >= self.limit {
     ///             return false;
     ///         }
-    ///         *spent += 1;
+    ///         counter.1 += 1;
     ///         true
     ///     }
     ///
     ///     fn used(&self, now: OffsetDateTime) -> u32 {
-    ///         *self.spent.lock().expect("the lock is held")
+    ///         self.counter(now).1
     ///     }
     ///
     ///     fn bounded_limit(&self) -> Option<u32> {
-    ///         Some(500)
+    ///         Some(self.limit)
     ///     }
     /// }
     ///
     /// let bots = BadBots::builder()
     ///     .config(Config::default())
+    ///     .enable_abuseipdb()
+    ///     .abuseipdb_api_key("your-api-key")
     ///     .quota(
     ///         ProviderId::ABUSEIPDB,
     ///         Arc::new(SharedBudget {
-    ///             spent: std::sync::Mutex::new(0),
+    ///             counter: Mutex::new((None, 0)),
+    ///             limit: 500,
     ///         }),
     ///     )
     ///     .build()
     ///     .unwrap();
     /// # let _ = bots;
+    /// # }
     /// ```
     pub fn quota(mut self, provider: ProviderId, quota: Arc<dyn Quota>) -> Self {
-        self.quotas.insert(provider, quota);
+        self.budgets.insert(provider, quota);
         self
     }
 
@@ -1209,7 +1246,7 @@ impl BadBotsBuilder {
     /// queued, so building the library does not start it.
     pub fn build(self) -> Result<BadBots, ConfigError> {
         let config = self.config;
-        let quotas = self.quotas;
+        let mut budgets = self.budgets;
 
         if config.providers.abuseipdb_enabled() && !cfg!(feature = "abuseipdb") {
             return Err(ConfigError::MissingFeature {
@@ -1252,7 +1289,7 @@ impl BadBotsBuilder {
         };
 
         let clock = self.clock.unwrap_or_else(clock::system_clock);
-        let registered = registered_providers(&config, &client, &clock, &quotas)?;
+        let registered = registered_providers(&config, &client, &clock, &mut budgets)?;
         let mut providers: Vec<Arc<dyn LookupProvider>> = Vec::with_capacity(registered.len());
         let mut lookup_runtimes: HashMap<ProviderId, Arc<ProviderRuntime>> = HashMap::new();
         let mut ids: Vec<ProviderId> = Vec::with_capacity(registered.len());
@@ -1281,7 +1318,7 @@ impl BadBotsBuilder {
 
         let mut feed_runtimes: HashMap<ProviderId, Arc<ProviderRuntime>> = HashMap::new();
         let mut feed_providers =
-            registered_feed_providers(&config, &client, &clock, &mut feed_runtimes, &quotas);
+            registered_feed_providers(&config, &client, &clock, &mut feed_runtimes, &mut budgets);
         for registration in self.feed_registrations {
             let runtime = Arc::new(ProviderRuntime::new(
                 client.clone(),
@@ -1301,6 +1338,13 @@ impl BadBotsBuilder {
             .markers
             .unwrap_or_else(|| config::markers_from_config(&config.user_agent));
         let concurrency = Semaphore::new(config.max_concurrent_verifications.max(1));
+
+        for provider in budgets.keys() {
+            tracing::warn!(
+                provider = %provider,
+                "the injected budget of the provider was not applied"
+            );
+        }
 
         let shared = Arc::new(Shared {
             cache: TtlCache::new(config.cache_capacity, config.failure_ttl),
@@ -1339,7 +1383,7 @@ fn registered_providers(
     config: &Config,
     client: &reqwest::Client,
     clock: &Arc<dyn Clock>,
-    quotas: &HashMap<ProviderId, Arc<dyn Quota>>,
+    budgets: &mut HashMap<ProviderId, Arc<dyn Quota>>,
 ) -> Result<Vec<RegisteredProvider>, ConfigError> {
     #[cfg_attr(
         not(any(feature = "abuseipdb", feature = "crowdsec")),
@@ -1367,7 +1411,7 @@ fn registered_providers(
                 .abuseipdb
                 .as_ref()
                 .expect("the provider is enabled");
-            let quota = budget_of(quotas, &ProviderId::ABUSEIPDB, || {
+            let quota = budget_for(budgets, &ProviderId::ABUSEIPDB, || {
                 daily_guard(
                     provider_config
                         .daily_quota
@@ -1418,7 +1462,7 @@ fn registered_providers(
                 .crowdsec
                 .as_ref()
                 .expect("the provider is enabled");
-            let quota = budget_of(quotas, &ProviderId::CROWDSEC, || {
+            let quota = budget_for(budgets, &ProviderId::CROWDSEC, || {
                 monthly_guard(
                     provider_config
                         .monthly_quota
@@ -1457,7 +1501,7 @@ fn registered_providers(
                 .expect("the provider is enabled");
 
             if provider_config.use_per_address_query {
-                let quota = budget_of(quotas, &ProviderId::BLOCKLIST_DE, || {
+                let quota = budget_for(budgets, &ProviderId::BLOCKLIST_DE, || {
                     daily_guard(
                         provider_config
                             .daily_quota
@@ -1501,7 +1545,7 @@ fn registered_feed_providers(
     client: &reqwest::Client,
     clock: &Arc<dyn Clock>,
     runtimes: &mut HashMap<ProviderId, Arc<ProviderRuntime>>,
-    quotas: &HashMap<ProviderId, Arc<dyn Quota>>,
+    budgets: &mut HashMap<ProviderId, Arc<dyn Quota>>,
 ) -> Vec<Arc<dyn FeedProvider>> {
     let mut registered: Vec<Arc<dyn FeedProvider>> = Vec::new();
 
@@ -1513,7 +1557,7 @@ fn registered_feed_providers(
                 .spamhaus
                 .as_ref()
                 .expect("the provider is enabled");
-            let quota = budget_of(quotas, &ProviderId::SPAMHAUS, || {
+            let quota = budget_for(budgets, &ProviderId::SPAMHAUS, || {
                 daily_guard(FEED_DEFAULT_DAILY_QUOTA)
             });
             let runtime = Arc::new(ProviderRuntime::new(
@@ -1547,7 +1591,7 @@ fn registered_feed_providers(
                 .expect("the provider is enabled");
 
             if provider_config.use_service_lists {
-                let quota = budget_of(quotas, &ProviderId::BLOCKLIST_DE_LISTS, || {
+                let quota = budget_for(budgets, &ProviderId::BLOCKLIST_DE_LISTS, || {
                     daily_guard(FEED_DEFAULT_DAILY_QUOTA)
                 });
                 let runtime = Arc::new(ProviderRuntime::new(
@@ -1580,7 +1624,7 @@ fn registered_feed_providers(
                 .dshield
                 .as_ref()
                 .expect("the provider is enabled");
-            let quota = budget_of(quotas, &ProviderId::DSHIELD, || {
+            let quota = budget_for(budgets, &ProviderId::DSHIELD, || {
                 daily_guard(FEED_DEFAULT_DAILY_QUOTA)
             });
             let runtime = Arc::new(ProviderRuntime::new(
@@ -1614,8 +1658,9 @@ fn registered_feed_providers(
 /// The budget the host injected for a provider, or the budget the
 /// configuration describes.
 ///
-/// The budget of a provider the host registers is not looked up here: the
-/// registration carries it.
+/// The budget is taken out of the map, so the map holds the budgets that no
+/// provider spent. The budget of a provider the host registers is not looked
+/// up here: the registration carries it.
 #[cfg_attr(
     not(any(
         feature = "abuseipdb",
@@ -1626,13 +1671,13 @@ fn registered_feed_providers(
     )),
     allow(dead_code)
 )]
-fn budget_of(
-    quotas: &HashMap<ProviderId, Arc<dyn Quota>>,
+fn budget_for(
+    budgets: &mut HashMap<ProviderId, Arc<dyn Quota>>,
     provider: &ProviderId,
     configured: impl FnOnce() -> Arc<dyn Quota>,
 ) -> Arc<dyn Quota> {
-    match quotas.get(provider) {
-        Some(quota) => Arc::clone(quota),
+    match budgets.remove(provider) {
+        Some(quota) => quota,
         None => configured(),
     }
 }

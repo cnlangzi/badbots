@@ -2,8 +2,9 @@
 
 mod common;
 
+use std::fmt;
 use std::net::IpAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
 use badbots::provider::{LookupProvider, ProviderCapability, ProviderCost, ProviderFinding};
@@ -148,4 +149,57 @@ async fn an_injected_budget_replaces_the_configured_budget() {
         .expect("the provider is reported");
     assert_eq!(status.quota_limit, Some(5), "the injected budget is spent");
     assert_eq!(status.quota_used, Some(1));
+}
+
+#[test]
+fn a_budget_that_no_provider_spends_is_reported() {
+    let recorded = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Recorder(Arc::clone(&recorded));
+
+    tracing::subscriber::with_default(recorder, || {
+        BadBots::builder()
+            .quota(ProviderId::new("unknown"), daily_guard(5))
+            .build()
+            .expect("the library is built");
+    });
+
+    let recorded = recorded.lock().expect("the lock is held");
+    assert_eq!(recorded.as_slice(), ["unknown"]);
+}
+
+/// A subscriber that records the provider of every event.
+struct Recorder(Arc<Mutex<Vec<String>>>);
+
+impl tracing::Subscriber for Recorder {
+    fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        let mut visitor = Visitor(self.0.lock().expect("the lock is held"));
+        event.record(&mut visitor);
+    }
+
+    fn enter(&self, _span: &tracing::span::Id) {}
+
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+/// A visitor that records the provider of an event.
+struct Visitor<'a>(MutexGuard<'a, Vec<String>>);
+
+impl tracing::field::Visit for Visitor<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
+        if field.name() == "provider" {
+            self.0.push(format!("{value:?}"));
+        }
+    }
 }
