@@ -1,6 +1,6 @@
 [package]
 name = "badbots"
-version = "0.2.0"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT"
@@ -10,6 +10,9 @@ documentation = "https://docs.rs/badbots"
 readme = "README.md"
 keywords = ["security", "ip", "reputation", "abuse", "bot"]
 categories = ["security"]
+
+[package.metadata.docs.rs]
+features = ["full"]
 
 [features]
 default = []
