@@ -9,9 +9,8 @@ observation from either of them counts as one vote.
 
 1. Enable the crate feature:
 
-   ```toml
-   [dependencies]
-   badbots = { version = "0.2", features = ["blocklist_de"] }
+   ```sh
+   cargo add badbots --features blocklist_de
    ```
 
 2. Enable the provider:

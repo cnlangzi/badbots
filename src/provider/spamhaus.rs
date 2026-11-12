@@ -4,6 +4,9 @@
 //! operations lease or steal. The listing is a statement about a range and
 //! never about a single address, so an observation from this provider may only
 //! corroborate the observation of another family.
+//!
+//! The provider is compiled in by the `spamhaus` crate feature. It expects no
+//! credential: the lists it reads are published for everyone.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

@@ -3,6 +3,14 @@
 //! The upstream publishes a reputation, the behaviors it observed, the
 //! classifications it assigned and the references it links the address to. The
 //! key is sent in the `x-api-key` header.
+//!
+//! The provider is compiled in by the `crowdsec` crate feature. It expects an
+//! API key, which the host supplies through the `api_key` field of
+//! [`CrowdSecConfig`](crate::config::CrowdSecConfig), the `crowdsec_api_key`
+//! builder method or the `BADBOTS_CROWDSEC_API_KEY` environment variable. A
+//! provider that is enabled without a key is reported as
+//! [`ConfigError::MissingApiKey`](crate::ConfigError::MissingApiKey) when the
+//! library is built.
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;

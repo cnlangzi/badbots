@@ -5,6 +5,9 @@
 //! per-service lists that name the addresses those sensors saw. The query
 //! carries a count and may corroborate; a list membership carries no count and
 //! is only a signal.
+//!
+//! The provider is compiled in by the `blocklist_de` crate feature. It expects
+//! no credential: the query and the lists it reads are published for everyone.
 
 use std::collections::{BTreeMap, HashSet};
 use std::net::IpAddr;

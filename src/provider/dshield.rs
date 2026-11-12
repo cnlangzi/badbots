@@ -3,6 +3,12 @@
 //! The upstream publishes the subnets its sensors saw scanning and the
 //! addresses its sensors saw attacking. A block record describes a range, so it
 //! is only a signal; a threat intelligence record describes a single address.
+//!
+//! The provider is compiled in by the `dshield` crate feature. It expects no
+//! credential: the lists it reads are published for everyone. The publisher
+//! refuses requests that do not identify their sender, so the provider sends
+//! the user agent of the `user_agent` field of
+//! [`DShieldConfig`](crate::config::DShieldConfig), or a default one.
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;

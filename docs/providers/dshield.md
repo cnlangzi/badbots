@@ -8,9 +8,8 @@ other names the addresses that were seen attacking.
 
 1. Enable the crate feature:
 
-   ```toml
-   [dependencies]
-   badbots = { version = "0.2", features = ["dshield"] }
+   ```sh
+   cargo add badbots --features dshield
    ```
 
 2. Enable the provider and identify the operator:

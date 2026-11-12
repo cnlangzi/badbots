@@ -10,9 +10,8 @@ family.
 
 1. Enable the crate feature:
 
-   ```toml
-   [dependencies]
-   badbots = { version = "0.2", features = ["spamhaus"] }
+   ```sh
+   cargo add badbots --features spamhaus
    ```
 
 2. Enable the provider:

@@ -1,4 +1,17 @@
 //! The provider interfaces and the values they produce.
+//!
+//! Every provider the crate ships is compiled in by its own crate feature:
+//!
+//! | Feature | Module |
+//! |---|---|
+//! | `abuseipdb` | `provider::abuseipdb` |
+//! | `blocklist_de` | `provider::blocklist_de` |
+//! | `crowdsec` | `provider::crowdsec` |
+//! | `dshield` | `provider::dshield` |
+//! | `spamhaus` | `provider::spamhaus` |
+//!
+//! The crate enables none of them by default, and the `full` feature enables
+//! all five.
 
 use std::net::IpAddr;
 use std::sync::Arc;

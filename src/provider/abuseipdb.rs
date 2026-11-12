@@ -3,6 +3,14 @@
 //! The upstream publishes the confidence score of an address, the number of
 //! distinct reporters and the categories those reporters chose. The key is sent
 //! in the `Key` header because upstream logs query strings.
+//!
+//! The provider is compiled in by the `abuseipdb` crate feature. It expects an
+//! API key, which the host supplies through the `api_key` field of
+//! [`AbuseIpdbConfig`](crate::config::AbuseIpdbConfig), the `abuseipdb_api_key`
+//! builder method or the `BADBOTS_ABUSEIPDB_API_KEY` environment variable. A
+//! provider that is enabled without a key is reported as
+//! [`ConfigError::MissingApiKey`](crate::ConfigError::MissingApiKey) when the
+//! library is built.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;

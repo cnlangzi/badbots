@@ -12,6 +12,42 @@
 //! on every request, the address question costs quota and is asked only when
 //! the host is already suspicious.
 //!
+//! # Dependencies
+//!
+//! ```sh
+//! cargo add badbots --features full
+//! ```
+//!
+//! The `full` feature compiles in every provider the crate ships. A host that
+//! wants a single provider depends on the crate without the `full` feature and
+//! names the feature of that provider:
+//!
+//! ```sh
+//! cargo add badbots --features abuseipdb
+//! ```
+//!
+//! # Features
+//!
+//! | Feature | Provider |
+//! |---|---|
+//! | `abuseipdb` | AbuseIPDB |
+//! | `blocklist_de` | Blocklist.de |
+//! | `crowdsec` | CrowdSec CTI |
+//! | `dshield` | DShield |
+//! | `spamhaus` | Spamhaus DROP |
+//! | `full` | every provider above |
+//!
+//! The crate enables no provider by default. A provider is opt-in twice over:
+//! its crate feature has to be compiled in, and the configuration has to enable
+//! it. The AbuseIPDB and the CrowdSec provider expect an API key; the
+//! Spamhaus, the Blocklist.de and the DShield provider expect none.
+//!
+//! # Usage
+//!
+//! [`BadBots`] is the handle of the library, [`Config`] is its configuration,
+//! and the verdict it returns carries the reason it was reached as one of the
+//! variants of [`VerdictReason`].
+//!
 //! ```
 //! use badbots::{BadBots, Config};
 //!
@@ -26,6 +62,28 @@
 //! assert_eq!(verdict.classification, badbots::Classification::Unknown);
 //! assert_eq!(verdict.reason, badbots::VerdictReason::NoCoverage);
 //! ```
+//!
+//! # Enabling a provider
+//!
+//! The builder method enables the provider and the key method supplies the
+//! credential it needs:
+//!
+//! ```
+//! # #[cfg(feature = "abuseipdb")]
+//! # {
+//! use badbots::{BadBots, Config};
+//!
+//! let bots = BadBots::builder()
+//!     .config(Config::default())
+//!     .enable_abuseipdb()
+//!     .abuseipdb_api_key("your-api-key")
+//!     .build()
+//!     .unwrap();
+//! # }
+//! ```
+//!
+//! Without the `abuseipdb` crate feature the provider is not compiled in, and
+//! the build of the library fails with [`ConfigError::MissingFeature`].
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -837,6 +895,10 @@ impl BadBotsBuilder {
     }
 
     /// Enables the AbuseIPDB provider.
+    ///
+    /// The provider is compiled in by the `abuseipdb` crate feature. Without
+    /// that feature the provider is not compiled in, and the build of the
+    /// library fails with [`ConfigError::MissingFeature`].
     pub fn enable_abuseipdb(mut self) -> Self {
         let provider = self
             .config
@@ -848,6 +910,10 @@ impl BadBotsBuilder {
     }
 
     /// Enables the CrowdSec provider.
+    ///
+    /// The provider is compiled in by the `crowdsec` crate feature. Without
+    /// that feature the provider is not compiled in, and the build of the
+    /// library fails with [`ConfigError::MissingFeature`].
     pub fn enable_crowdsec(mut self) -> Self {
         let provider = self
             .config
@@ -859,6 +925,10 @@ impl BadBotsBuilder {
     }
 
     /// Enables the Spamhaus DROP provider.
+    ///
+    /// The provider is compiled in by the `spamhaus` crate feature. Without
+    /// that feature the provider is not compiled in, and the build of the
+    /// library fails with [`ConfigError::MissingFeature`].
     pub fn enable_spamhaus(mut self) -> Self {
         let provider = self
             .config
@@ -870,6 +940,10 @@ impl BadBotsBuilder {
     }
 
     /// Enables the Blocklist.de provider.
+    ///
+    /// The provider is compiled in by the `blocklist_de` crate feature. Without
+    /// that feature the provider is not compiled in, and the build of the
+    /// library fails with [`ConfigError::MissingFeature`].
     pub fn enable_blocklist_de(mut self) -> Self {
         let provider = self
             .config
@@ -881,6 +955,10 @@ impl BadBotsBuilder {
     }
 
     /// Enables the DShield provider.
+    ///
+    /// The provider is compiled in by the `dshield` crate feature. Without that
+    /// feature the provider is not compiled in, and the build of the library
+    /// fails with [`ConfigError::MissingFeature`].
     pub fn enable_dshield(mut self) -> Self {
         let provider = self
             .config
