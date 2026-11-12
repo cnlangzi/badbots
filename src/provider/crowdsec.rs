@@ -410,8 +410,9 @@ mod tests {
 
     use super::{CrowdSecProvider, default_intents, intent_of, threat_category};
     use crate::model::{BehaviorIntent, ThreatCategory};
-    use crate::provider::lookup::{ProviderRuntime, monthly_guard};
+    use crate::provider::lookup::ProviderRuntime;
     use crate::provider::{LookupProvider, ProviderCost};
+    use crate::quota::monthly_guard;
     use crate::secret::ApiKey;
 
     #[test]

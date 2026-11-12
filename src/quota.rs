@@ -1,12 +1,47 @@
-//! The local budget guard.
+//! The budget of a provider.
 //!
 //! The upstream quotas of the supported sources are small enough that an
 //! accidental call loop would exhaust them, so the library counts the lookups it
 //! issues itself and refuses to exceed the configured budget.
+//!
+//! The budget of an upstream key belongs to every process that spends it, so a
+//! host that runs the library in more than one process and shares one key
+//! between them implements [`Quota`] itself and hands its budget to the
+//! library. [`QuotaGuard`] is the in-process implementation the crate ships.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use time::OffsetDateTime;
+
+/// The budget of a provider.
+///
+/// The implementation decides:
+///
+/// - that [`try_consume`](Quota::try_consume) is atomic across every caller
+///   that shares the budget, because the library asks the budget from its
+///   worker thread and several processes of a host may share one budget;
+/// - the window the budget is counted over and when that window rolls over;
+/// - that [`used`](Quota::used) reports the number of lookups spent in the
+///   current window;
+/// - that [`bounded_limit`](Quota::bounded_limit) reports `None` when the
+///   budget has no limit.
+pub trait Quota: Send + Sync {
+    /// Spends one lookup of the budget.
+    ///
+    /// The call has to be atomic across every caller that shares the budget.
+    ///
+    /// Returns `false` when the budget of the current window is used up, in
+    /// which case the caller must not contact the upstream service.
+    fn try_consume(&self, now: OffsetDateTime) -> bool;
+
+    /// The number of lookups already spent in the current window.
+    fn used(&self, now: OffsetDateTime) -> u32;
+
+    /// The budget of the current window, when the counter has one.
+    ///
+    /// A counter without a budget has no limit to report.
+    fn bounded_limit(&self) -> Option<u32>;
+}
 
 /// The period a budget is counted over.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -120,11 +155,35 @@ impl QuotaGuard {
     }
 }
 
+impl Quota for QuotaGuard {
+    fn try_consume(&self, now: OffsetDateTime) -> bool {
+        QuotaGuard::try_consume(self, now)
+    }
+
+    fn used(&self, now: OffsetDateTime) -> u32 {
+        QuotaGuard::used(self, now)
+    }
+
+    fn bounded_limit(&self) -> Option<u32> {
+        QuotaGuard::bounded_limit(self)
+    }
+}
+
+/// The budget of a provider that is counted per day.
+pub fn daily_guard(limit: u32) -> Arc<dyn Quota> {
+    Arc::new(QuotaGuard::new(limit, QuotaWindow::Day))
+}
+
+/// The budget of a provider that is counted per month.
+pub fn monthly_guard(limit: u32) -> Arc<dyn Quota> {
+    Arc::new(QuotaGuard::new(limit, QuotaWindow::Month))
+}
+
 #[cfg(test)]
 mod tests {
     use time::macros::datetime;
 
-    use super::{QuotaGuard, QuotaWindow};
+    use super::{Quota, QuotaGuard, QuotaWindow, daily_guard, monthly_guard};
 
     #[test]
     fn a_budget_is_spent_within_a_window() {
@@ -166,5 +225,38 @@ mod tests {
         }
         assert_eq!(guard.used(now), 1_000);
         assert_eq!(guard.bounded_limit(), None);
+    }
+
+    #[test]
+    fn the_guard_answers_the_budget_trait_like_its_own_methods() {
+        let guard = QuotaGuard::new(2, QuotaWindow::Day);
+        let now = datetime!(2026-01-01 00:00:00 UTC);
+
+        assert!(Quota::try_consume(&guard, now));
+        assert!(Quota::try_consume(&guard, now));
+        assert!(!Quota::try_consume(&guard, now));
+        assert_eq!(Quota::used(&guard, now), QuotaGuard::used(&guard, now));
+        assert_eq!(
+            Quota::bounded_limit(&guard),
+            QuotaGuard::bounded_limit(&guard)
+        );
+    }
+
+    #[test]
+    fn the_daily_and_the_monthly_budget_spend_their_own_window() {
+        let now = datetime!(2026-01-01 00:00:00 UTC);
+        let next_day = datetime!(2026-01-02 00:00:00 UTC);
+        let next_month = datetime!(2026-02-01 00:00:00 UTC);
+
+        let daily = daily_guard(1);
+        assert!(daily.try_consume(now));
+        assert!(!daily.try_consume(now));
+        assert!(daily.try_consume(next_day));
+
+        let monthly = monthly_guard(1);
+        assert!(monthly.try_consume(now));
+        assert!(!monthly.try_consume(next_day));
+        assert!(monthly.try_consume(next_month));
+        assert_eq!(monthly.bounded_limit(), Some(1));
     }
 }

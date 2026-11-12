@@ -323,8 +323,9 @@ mod tests {
 
     use super::{AbuseIpdbProvider, INBOUND_ATTACK_CATEGORIES, category_of};
     use crate::model::{Assertion, ThreatCategory};
-    use crate::provider::lookup::{ProviderRuntime, daily_guard};
+    use crate::provider::lookup::ProviderRuntime;
     use crate::provider::{LookupProvider, ProviderCost};
+    use crate::quota::daily_guard;
     use crate::secret::ApiKey;
 
     #[test]

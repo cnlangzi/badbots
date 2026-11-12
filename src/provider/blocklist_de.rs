@@ -369,8 +369,9 @@ mod tests {
     use std::time::Duration;
 
     use super::BlocklistDeQueryProvider;
-    use crate::provider::lookup::{ProviderRuntime, daily_guard};
+    use crate::provider::lookup::ProviderRuntime;
     use crate::provider::{LookupProvider, ProviderCost};
+    use crate::quota::daily_guard;
 
     #[test]
     fn the_query_provider_states_its_cost() {

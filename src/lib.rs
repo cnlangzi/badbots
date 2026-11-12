@@ -123,12 +123,12 @@ pub use model::{
     Evidence, EvidenceStrength, IpVerdict, MatchScope, ObservationWindow, ProviderId, SourceFamily,
     Suppression, ThreatCategory, UaState, UserAgentMarkers, VerdictInput, VerdictReason,
 };
-pub use provider::lookup::{ProviderRuntime, daily_guard, monthly_guard};
+pub use provider::lookup::ProviderRuntime;
 pub use provider::{
     FeedProvider, FeedRefreshReport, FeedRefreshResult, FeedSnapshot, LookupProvider,
     ProviderCapability, ProviderCost, ProviderFinding, ProviderStatus,
 };
-pub use quota::{QuotaGuard, QuotaWindow};
+pub use quota::{Quota, QuotaGuard, QuotaWindow, daily_guard, monthly_guard};
 pub use secret::ApiKey;
 
 use std::collections::HashMap;
@@ -849,19 +849,20 @@ pub struct BadBotsBuilder {
     client: Option<reqwest::Client>,
     clock: Option<Arc<dyn Clock>>,
     markers: Option<UserAgentMarkers>,
+    quotas: HashMap<ProviderId, Arc<dyn Quota>>,
     lookup_registrations: Vec<LookupRegistration>,
     feed_registrations: Vec<FeedRegistration>,
 }
 
 /// A lookup provider the host registered and the factory that builds it.
 struct LookupRegistration {
-    quota: QuotaGuard,
+    quota: Arc<dyn Quota>,
     factory: Box<dyn FnOnce(Arc<ProviderRuntime>) -> Arc<dyn LookupProvider> + Send>,
 }
 
 /// A feed provider the host registered and the factory that builds it.
 struct FeedRegistration {
-    quota: QuotaGuard,
+    quota: Arc<dyn Quota>,
     factory: Box<dyn FnOnce(Arc<ProviderRuntime>) -> Arc<dyn FeedProvider> + Send>,
 }
 
@@ -1039,6 +1040,66 @@ impl BadBotsBuilder {
         self
     }
 
+    /// Sets the budget of a provider the crate ships.
+    ///
+    /// The budget replaces the one the configuration describes: the
+    /// `daily_quota` of AbuseIPDB and of Blocklist.de, the `monthly_quota` of
+    /// CrowdSec and the default budget of the list providers are ignored for
+    /// that provider.
+    ///
+    /// The budget of an upstream key belongs to every process that spends it, so
+    /// a host that runs the library in more than one process and shares one key
+    /// between them hands the same budget to every process. The budget of a
+    /// provider the host registers is the one the registration carries; this
+    /// method does not reach it.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    ///
+    /// use badbots::{BadBots, Config, ProviderId, Quota};
+    /// use time::OffsetDateTime;
+    ///
+    /// /// A budget the host keeps in a store its processes share.
+    /// struct SharedBudget {
+    ///     spent: std::sync::Mutex<u32>,
+    /// }
+    ///
+    /// impl Quota for SharedBudget {
+    ///     fn try_consume(&self, now: OffsetDateTime) -> bool {
+    ///         let mut spent = self.spent.lock().expect("the lock is held");
+    ///         if *spent >= 500 {
+    ///             return false;
+    ///         }
+    ///         *spent += 1;
+    ///         true
+    ///     }
+    ///
+    ///     fn used(&self, now: OffsetDateTime) -> u32 {
+    ///         *self.spent.lock().expect("the lock is held")
+    ///     }
+    ///
+    ///     fn bounded_limit(&self) -> Option<u32> {
+    ///         Some(500)
+    ///     }
+    /// }
+    ///
+    /// let bots = BadBots::builder()
+    ///     .config(Config::default())
+    ///     .quota(
+    ///         ProviderId::ABUSEIPDB,
+    ///         Arc::new(SharedBudget {
+    ///             spent: std::sync::Mutex::new(0),
+    ///         }),
+    ///     )
+    ///     .build()
+    ///     .unwrap();
+    /// # let _ = bots;
+    /// ```
+    pub fn quota(mut self, provider: ProviderId, quota: Arc<dyn Quota>) -> Self {
+        self.quotas.insert(provider, quota);
+        self
+    }
+
     /// Registers a provider that is asked about one address at a time.
     ///
     /// The library builds the provider while it builds the library and hands it
@@ -1105,7 +1166,7 @@ impl BadBotsBuilder {
     ///     .build()
     ///     .unwrap();
     /// ```
-    pub fn lookup_provider<P, F>(mut self, quota: QuotaGuard, factory: F) -> Self
+    pub fn lookup_provider<P, F>(mut self, quota: Arc<dyn Quota>, factory: F) -> Self
     where
         P: LookupProvider + 'static,
         F: FnOnce(Arc<ProviderRuntime>) -> P + Send + 'static,
@@ -1125,7 +1186,7 @@ impl BadBotsBuilder {
     /// spends the quota of the registration and uses the client and the clock
     /// of the host. A registered provider replaces a provider of the same
     /// identifier that the configuration asks for.
-    pub fn feed_provider<P, F>(mut self, quota: QuotaGuard, factory: F) -> Self
+    pub fn feed_provider<P, F>(mut self, quota: Arc<dyn Quota>, factory: F) -> Self
     where
         P: FeedProvider + 'static,
         F: FnOnce(Arc<ProviderRuntime>) -> P + Send + 'static,
@@ -1148,6 +1209,7 @@ impl BadBotsBuilder {
     /// queued, so building the library does not start it.
     pub fn build(self) -> Result<BadBots, ConfigError> {
         let config = self.config;
+        let quotas = self.quotas;
 
         if config.providers.abuseipdb_enabled() && !cfg!(feature = "abuseipdb") {
             return Err(ConfigError::MissingFeature {
@@ -1190,7 +1252,7 @@ impl BadBotsBuilder {
         };
 
         let clock = self.clock.unwrap_or_else(clock::system_clock);
-        let registered = registered_providers(&config, &client, &clock)?;
+        let registered = registered_providers(&config, &client, &clock, &quotas)?;
         let mut providers: Vec<Arc<dyn LookupProvider>> = Vec::with_capacity(registered.len());
         let mut lookup_runtimes: HashMap<ProviderId, Arc<ProviderRuntime>> = HashMap::new();
         let mut ids: Vec<ProviderId> = Vec::with_capacity(registered.len());
@@ -1219,7 +1281,7 @@ impl BadBotsBuilder {
 
         let mut feed_runtimes: HashMap<ProviderId, Arc<ProviderRuntime>> = HashMap::new();
         let mut feed_providers =
-            registered_feed_providers(&config, &client, &clock, &mut feed_runtimes);
+            registered_feed_providers(&config, &client, &clock, &mut feed_runtimes, &quotas);
         for registration in self.feed_registrations {
             let runtime = Arc::new(ProviderRuntime::new(
                 client.clone(),
@@ -1277,6 +1339,7 @@ fn registered_providers(
     config: &Config,
     client: &reqwest::Client,
     clock: &Arc<dyn Clock>,
+    quotas: &HashMap<ProviderId, Arc<dyn Quota>>,
 ) -> Result<Vec<RegisteredProvider>, ConfigError> {
     #[cfg_attr(
         not(any(feature = "abuseipdb", feature = "crowdsec")),
@@ -1304,13 +1367,16 @@ fn registered_providers(
                 .abuseipdb
                 .as_ref()
                 .expect("the provider is enabled");
-            let runtime = Arc::new(ProviderRuntime::new(
-                client.clone(),
-                provider::lookup::daily_guard(
+            let quota = budget_of(quotas, &ProviderId::ABUSEIPDB, || {
+                daily_guard(
                     provider_config
                         .daily_quota
                         .unwrap_or(ABUSEIPDB_DEFAULT_DAILY_QUOTA),
-                ),
+                )
+            });
+            let runtime = Arc::new(ProviderRuntime::new(
+                client.clone(),
+                quota,
                 config.request_timeout,
                 Arc::clone(clock),
             ));
@@ -1352,13 +1418,16 @@ fn registered_providers(
                 .crowdsec
                 .as_ref()
                 .expect("the provider is enabled");
-            let runtime = Arc::new(ProviderRuntime::new(
-                client.clone(),
-                provider::lookup::monthly_guard(
+            let quota = budget_of(quotas, &ProviderId::CROWDSEC, || {
+                monthly_guard(
                     provider_config
                         .monthly_quota
                         .unwrap_or(CROWDSEC_DEFAULT_MONTHLY_QUOTA),
-                ),
+                )
+            });
+            let runtime = Arc::new(ProviderRuntime::new(
+                client.clone(),
+                quota,
                 config.request_timeout,
                 Arc::clone(clock),
             ));
@@ -1388,13 +1457,16 @@ fn registered_providers(
                 .expect("the provider is enabled");
 
             if provider_config.use_per_address_query {
-                let runtime = Arc::new(ProviderRuntime::new(
-                    client.clone(),
-                    provider::lookup::daily_guard(
+                let quota = budget_of(quotas, &ProviderId::BLOCKLIST_DE, || {
+                    daily_guard(
                         provider_config
                             .daily_quota
                             .unwrap_or(BLOCKLIST_DE_DEFAULT_DAILY_QUOTA),
-                    ),
+                    )
+                });
+                let runtime = Arc::new(ProviderRuntime::new(
+                    client.clone(),
+                    quota,
                     config.request_timeout,
                     Arc::clone(clock),
                 ));
@@ -1429,6 +1501,7 @@ fn registered_feed_providers(
     client: &reqwest::Client,
     clock: &Arc<dyn Clock>,
     runtimes: &mut HashMap<ProviderId, Arc<ProviderRuntime>>,
+    quotas: &HashMap<ProviderId, Arc<dyn Quota>>,
 ) -> Vec<Arc<dyn FeedProvider>> {
     let mut registered: Vec<Arc<dyn FeedProvider>> = Vec::new();
 
@@ -1440,9 +1513,12 @@ fn registered_feed_providers(
                 .spamhaus
                 .as_ref()
                 .expect("the provider is enabled");
+            let quota = budget_of(quotas, &ProviderId::SPAMHAUS, || {
+                daily_guard(FEED_DEFAULT_DAILY_QUOTA)
+            });
             let runtime = Arc::new(ProviderRuntime::new(
                 client.clone(),
-                provider::lookup::daily_guard(FEED_DEFAULT_DAILY_QUOTA),
+                quota,
                 config.request_timeout,
                 Arc::clone(clock),
             ));
@@ -1471,9 +1547,12 @@ fn registered_feed_providers(
                 .expect("the provider is enabled");
 
             if provider_config.use_service_lists {
+                let quota = budget_of(quotas, &ProviderId::BLOCKLIST_DE_LISTS, || {
+                    daily_guard(FEED_DEFAULT_DAILY_QUOTA)
+                });
                 let runtime = Arc::new(ProviderRuntime::new(
                     client.clone(),
-                    provider::lookup::daily_guard(FEED_DEFAULT_DAILY_QUOTA),
+                    quota,
                     config.request_timeout,
                     Arc::clone(clock),
                 ));
@@ -1501,9 +1580,12 @@ fn registered_feed_providers(
                 .dshield
                 .as_ref()
                 .expect("the provider is enabled");
+            let quota = budget_of(quotas, &ProviderId::DSHIELD, || {
+                daily_guard(FEED_DEFAULT_DAILY_QUOTA)
+            });
             let runtime = Arc::new(ProviderRuntime::new(
                 client.clone(),
-                provider::lookup::daily_guard(FEED_DEFAULT_DAILY_QUOTA),
+                quota,
                 config.request_timeout,
                 Arc::clone(clock),
             ));
@@ -1527,6 +1609,32 @@ fn registered_feed_providers(
     }
 
     registered
+}
+
+/// The budget the host injected for a provider, or the budget the
+/// configuration describes.
+///
+/// The budget of a provider the host registers is not looked up here: the
+/// registration carries it.
+#[cfg_attr(
+    not(any(
+        feature = "abuseipdb",
+        feature = "blocklist_de",
+        feature = "crowdsec",
+        feature = "dshield",
+        feature = "spamhaus"
+    )),
+    allow(dead_code)
+)]
+fn budget_of(
+    quotas: &HashMap<ProviderId, Arc<dyn Quota>>,
+    provider: &ProviderId,
+    configured: impl FnOnce() -> Arc<dyn Quota>,
+) -> Arc<dyn Quota> {
+    match quotas.get(provider) {
+        Some(quota) => Arc::clone(quota),
+        None => configured(),
+    }
 }
 
 #[cfg_attr(

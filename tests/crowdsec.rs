@@ -10,9 +10,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use badbots::provider::crowdsec::CrowdSecProvider;
-use badbots::provider::lookup::{ProviderRuntime, monthly_guard};
+use badbots::provider::lookup::ProviderRuntime;
 use badbots::provider::{LookupProvider, ProviderCapability};
-use badbots::{ApiKey, EvidenceStrength, ProviderError, ProviderId, SourceFamily, Suppression};
+use badbots::{
+    ApiKey, EvidenceStrength, ProviderError, ProviderId, SourceFamily, Suppression, monthly_guard,
+};
 use common::{fixture, render};
 use time::OffsetDateTime;
 use wiremock::matchers::{method, path};

@@ -13,7 +13,7 @@ use time::OffsetDateTime;
 use crate::clock::Clock;
 use crate::error::ProviderError;
 use crate::http::{map_transport_error, parse_retry_after};
-use crate::quota::{QuotaGuard, QuotaWindow};
+use crate::quota::Quota;
 use crate::ratelimit::Cooldown;
 
 /// The cooldown a provider enters when it does not advertise a `Retry-After`.
@@ -23,7 +23,7 @@ pub const DEFAULT_COOLDOWN: Duration = Duration::from_secs(60);
 pub struct ProviderRuntime {
     client: reqwest::Client,
     cooldown: Cooldown,
-    quota: QuotaGuard,
+    quota: Arc<dyn Quota>,
     timeout: Duration,
     clock: Arc<dyn Clock>,
 }
@@ -32,7 +32,7 @@ impl fmt::Debug for ProviderRuntime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProviderRuntime")
             .field("cooldown", &self.cooldown)
-            .field("quota", &self.quota)
+            .field("quota_limit", &self.quota.bounded_limit())
             .field("timeout", &self.timeout)
             .finish()
     }
@@ -42,7 +42,7 @@ impl ProviderRuntime {
     /// Creates a runtime for one provider.
     pub fn new(
         client: reqwest::Client,
-        quota: QuotaGuard,
+        quota: Arc<dyn Quota>,
         timeout: Duration,
         clock: Arc<dyn Clock>,
     ) -> Self {
@@ -55,9 +55,9 @@ impl ProviderRuntime {
         }
     }
 
-    /// The budget guard of the provider.
-    pub fn quota(&self) -> &QuotaGuard {
-        &self.quota
+    /// The budget of the provider.
+    pub fn quota(&self) -> &dyn Quota {
+        self.quota.as_ref()
     }
 
     /// The HTTP client of the provider.
@@ -166,14 +166,4 @@ impl ProviderRuntime {
 /// Parses a JSON body.
 pub fn parse_body<T: serde::de::DeserializeOwned>(body: &str) -> Result<T, ProviderError> {
     serde_json::from_str(body).map_err(|error| ProviderError::Parse(error.to_string()))
-}
-
-/// The budget guard of a provider that is counted per day.
-pub fn daily_guard(limit: u32) -> QuotaGuard {
-    QuotaGuard::new(limit, QuotaWindow::Day)
-}
-
-/// The budget guard of a provider that is counted per month.
-pub fn monthly_guard(limit: u32) -> QuotaGuard {
-    QuotaGuard::new(limit, QuotaWindow::Month)
 }

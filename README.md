@@ -375,6 +375,77 @@ The worker thread of the library belongs to that process as well: it is started
 by the first verification and stopped with the last handle of the library, so
 the process is never held open by it.
 
+### The budget of an upstream key
+
+The budget of an upstream key belongs to every process that spends it. By
+default every process counts its own budget, so a host that shares one key
+between its processes spends the quota of that key once per process. A host
+divides the budget of the key between its processes with the `daily_quota` and
+the `monthly_quota` configuration key of the provider.
+
+A host that wants to spend the budget of the key once implements `Quota` and
+hands the budget to the builder with `BadBotsBuilder::quota`. The budget then
+lives wherever the host keeps it, and the library asks it before every request
+of the provider. The instant a method of the trait takes is a
+`time::OffsetDateTime`, the type the library already exposes in
+`IpVerdict::assessed_at`; the crate does not re-export `time`, so the host
+depends on it the way it already does for those types.
+
+```rust
+use std::sync::Arc;
+
+use badbots::{BadBots, Config, ProviderId, Quota};
+use time::OffsetDateTime;
+
+/// The budget of an upstream key, counted in a store the processes share.
+struct SharedBudget {
+    spent: std::sync::Mutex<u32>,
+    limit: u32,
+}
+
+impl Quota for SharedBudget {
+    fn try_consume(&self, now: OffsetDateTime) -> bool {
+        let mut spent = self.spent.lock().unwrap();
+        if *spent >= self.limit {
+            return false;
+        }
+        *spent += 1;
+        true
+    }
+
+    fn used(&self, now: OffsetDateTime) -> u32 {
+        *self.spent.lock().unwrap()
+    }
+
+    fn bounded_limit(&self) -> Option<u32> {
+        Some(self.limit)
+    }
+}
+
+let bots = BadBots::builder()
+    .config(Config::default())
+    .quota(
+        ProviderId::ABUSEIPDB,
+        Arc::new(SharedBudget {
+            spent: std::sync::Mutex::new(0),
+            limit: 500,
+        }),
+    )
+    .build()?;
+```
+
+The budget replaces the one the configuration describes: the `daily_quota` of
+AbuseIPDB and of Blocklist.de, the `monthly_quota` of CrowdSec and the default
+budget of the list providers are ignored for that provider. The budget of a
+provider the host registers is the one the registration carries; the budget of
+the builder does not reach it.
+
+A budget that refuses a lookup ends in `ProviderError::QuotaExhausted`: the
+provider is recorded in `coverage.failed` and the verdict is computed from the
+evidence of the other providers. `try_consume` has to be atomic across every
+caller that shares the budget, because the library asks the budget from its
+worker thread and several processes of a host may share one budget.
+
 ## Expected coverage
 
 The library reports the sources it consults, so its coverage is the union of the

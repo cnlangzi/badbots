@@ -8,9 +8,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use badbots::provider::dshield::DShieldProvider;
-use badbots::provider::lookup::{ProviderRuntime, daily_guard};
+use badbots::provider::lookup::ProviderRuntime;
 use badbots::provider::{FeedProvider, ProviderCapability};
-use badbots::{Assertion, EvidenceStrength, MatchScope, ProviderId, SourceFamily, ThreatCategory};
+use badbots::{
+    Assertion, EvidenceStrength, MatchScope, ProviderId, SourceFamily, ThreatCategory, daily_guard,
+};
 use common::{TestClock, fixture};
 use time::{OffsetDateTime, macros::datetime};
 use wiremock::matchers::{method, path};
