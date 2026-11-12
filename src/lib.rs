@@ -507,9 +507,10 @@ impl BadBots {
 
     /// Classifies an address from the local state.
     ///
-    /// The call performs no network I/O on the calling thread: it answers from
-    /// the answers that are already cached, from the failures that are already
-    /// remembered and from the lists that are already loaded.
+    /// The call performs no network I/O on the calling thread and spends no
+    /// quota of its own: it answers from the answers that are already cached,
+    /// from the failures that are already remembered and from the lists that
+    /// are already loaded.
     ///
     /// The assessment is composed in the order the policy asks the providers
     /// in, and it stops reading as soon as the findings satisfy the evidence
@@ -518,8 +519,9 @@ impl BadBots {
     ///
     /// An assessment that is not `Bad` makes sure that a verification of the
     /// address runs, so that the answer becomes more precise without the caller
-    /// waiting for it. An address that cannot be assessed is never verified,
-    /// and an address that no provider can be asked about needs no verification
+    /// waiting for it. That verification spends the quota of the providers it
+    /// asks. An address that cannot be assessed is never verified, and an
+    /// address that no provider can be asked about needs no verification
     /// either.
     pub fn assess_ip(&self, ip: IpAddr) -> IpVerdict {
         let shared = &self.inner.shared;
