@@ -199,6 +199,23 @@ pub struct SteemanConfig {
     pub base_url: Option<String>,
 }
 
+/// The CINS Army list provider.
+///
+/// The upstream publishes the addresses its Sentinel sensors saw attacking. The
+/// list is published for everyone and expects no credential.
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub struct CinsConfig {
+    /// Whether the provider is queried.
+    #[serde(default)]
+    pub enabled: bool,
+    /// The shortest interval between two refreshes.
+    #[serde(default)]
+    pub min_refresh_interval: Option<Duration>,
+    /// The base URL of the list.
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
 /// The configuration of every supported provider.
 ///
 /// A provider is only compiled in by its own crate feature. A provider that is
@@ -225,6 +242,9 @@ pub struct ProviderConfig {
     /// The steeman list provider.
     #[serde(default)]
     pub steeman: Option<SteemanConfig>,
+    /// The CINS Army list provider.
+    #[serde(default)]
+    pub cins: Option<CinsConfig>,
 }
 
 /// The configuration of the library.
@@ -322,6 +342,8 @@ pub const BLOCKLIST_DE_FEATURE: &str = "blocklist_de";
 pub const DSHIELD_FEATURE: &str = "dshield";
 /// The identifier of the steeman provider.
 pub const STEEMAN_FEATURE: &str = "steeman";
+/// The identifier of the CINS provider.
+pub const CINS_FEATURE: &str = "cins";
 
 /// The upstream endpoint of the AbuseIPDB check API.
 pub const ABUSEIPDB_DEFAULT_BASE_URL: &str = "https://api.abuseipdb.com/api/v2";
@@ -337,6 +359,8 @@ pub const BLOCKLIST_DE_DEFAULT_LISTS_BASE_URL: &str = "https://lists.blocklist.d
 pub const DSHIELD_DEFAULT_BASE_URL: &str = "https://feeds.dshield.org";
 /// The upstream endpoint of the steeman list.
 pub const STEEMAN_DEFAULT_BASE_URL: &str = "https://www.steeman.org";
+/// The upstream endpoint of the CINS Army list.
+pub const CINS_DEFAULT_BASE_URL: &str = "https://cinsscore.com";
 
 /// The default daily budget of the AbuseIPDB provider.
 pub const ABUSEIPDB_DEFAULT_DAILY_QUOTA: u32 = 1_000;
@@ -360,6 +384,8 @@ pub const BLOCKLIST_DE_DEFAULT_MIN_REFRESH_INTERVAL: Duration = Duration::from_s
 pub const DSHIELD_DEFAULT_MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// The shortest interval between two steeman refreshes.
 pub const STEEMAN_DEFAULT_MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+/// The shortest interval between two CINS refreshes.
+pub const CINS_DEFAULT_MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// The interval the Blocklist.de per-address query asks about.
 pub const BLOCKLIST_DE_DEFAULT_WINDOW: Duration = Duration::from_secs(48 * 60 * 60);
 
@@ -392,6 +418,11 @@ impl ProviderConfig {
     /// Whether the steeman provider is configured and enabled.
     pub fn steeman_enabled(&self) -> bool {
         self.steeman.as_ref().is_some_and(|c| c.enabled)
+    }
+
+    /// Whether the CINS provider is configured and enabled.
+    pub fn cins_enabled(&self) -> bool {
+        self.cins.as_ref().is_some_and(|c| c.enabled)
     }
 }
 
