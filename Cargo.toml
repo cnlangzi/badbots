@@ -16,12 +16,13 @@ features = ["full"]
 
 [features]
 default = []
-full = ["abuseipdb", "blocklist_de", "crowdsec", "dshield", "spamhaus"]
+full = ["abuseipdb", "blocklist_de", "crowdsec", "dshield", "spamhaus", "steeman"]
 abuseipdb = []
 blocklist_de = []
 crowdsec = []
 dshield = []
 spamhaus = []
+steeman = []
 
 [dependencies]
 async-trait = "0.1"

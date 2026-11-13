@@ -9,9 +9,10 @@
 //! | `crowdsec` | `provider::crowdsec` |
 //! | `dshield` | `provider::dshield` |
 //! | `spamhaus` | `provider::spamhaus` |
+//! | `steeman` | `provider::steeman` |
 //!
 //! The crate enables none of them by default, and the `full` feature enables
-//! all five.
+//! all six.
 
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -37,6 +38,8 @@ pub mod crowdsec;
 pub mod dshield;
 #[cfg(feature = "spamhaus")]
 pub mod spamhaus;
+#[cfg(feature = "steeman")]
+pub mod steeman;
 
 /// What a provider is allowed to do with its observations.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]

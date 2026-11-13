@@ -3,10 +3,12 @@
 use std::time::Duration;
 
 use badbots::{
-    AbuseIpdbConfig, ApiKey, BadBots, BlocklistDeConfig, Classification, Config, ConfigError,
-    Coverage, CoverageLevel, DShieldConfig, Evidence, EvidencePolicy, EvidenceStrength, MatchScope,
-    NetworkScopePolicy, ProviderId, SourceFamily, SpamhausConfig, Suppression, ThreatCategory,
-    VerdictInput, VerdictReason,
+    AbuseIpdbConfig, ApiKey, BLOCKLIST_DE_DEFAULT_MIN_REFRESH_INTERVAL, BadBots, BlocklistDeConfig,
+    Classification, Config, ConfigError, Coverage, CoverageLevel,
+    DSHIELD_DEFAULT_MIN_REFRESH_INTERVAL, DShieldConfig, Evidence, EvidencePolicy,
+    EvidenceStrength, MatchScope, NetworkScopePolicy, ProviderId,
+    SPAMHAUS_DEFAULT_MIN_REFRESH_INTERVAL, STEEMAN_DEFAULT_MIN_REFRESH_INTERVAL, SourceFamily,
+    SpamhausConfig, SteemanConfig, Suppression, ThreatCategory, VerdictInput, VerdictReason,
 };
 use time::OffsetDateTime;
 
@@ -87,6 +89,11 @@ fn a_configuration_survives_a_serde_round_trip() {
         user_agent: Some("badbots/0.1.0".to_string()),
         base_url: Some("https://feeds.example.test".to_string()),
     });
+    config.providers.steeman = Some(SteemanConfig {
+        enabled: true,
+        min_refresh_interval: Some(Duration::from_secs(3600)),
+        base_url: Some("https://www.example.test".to_string()),
+    });
 
     let encoded = serde_json::to_string(&config).expect("the configuration is encoded");
     let decoded: Config = serde_json::from_str(&encoded).expect("the configuration is decoded");
@@ -105,6 +112,39 @@ fn the_list_providers_keep_their_documented_defaults() {
         .expect("the provider is configured");
     assert!(provider.use_per_address_query);
     assert!(provider.use_service_lists);
+}
+
+#[test]
+fn every_list_provider_waits_a_day_by_default() {
+    let a_day = Duration::from_secs(24 * 60 * 60);
+
+    assert_eq!(SPAMHAUS_DEFAULT_MIN_REFRESH_INTERVAL, a_day);
+    assert_eq!(BLOCKLIST_DE_DEFAULT_MIN_REFRESH_INTERVAL, a_day);
+    assert_eq!(DSHIELD_DEFAULT_MIN_REFRESH_INTERVAL, a_day);
+    assert_eq!(STEEMAN_DEFAULT_MIN_REFRESH_INTERVAL, a_day);
+}
+
+#[test]
+fn the_steeman_provider_is_enabled_by_its_configuration() {
+    let decoded: Config =
+        serde_json::from_str("{\"providers\":{\"steeman\":{\"enabled\":true}}}").unwrap();
+
+    assert!(decoded.providers.steeman_enabled());
+}
+
+#[test]
+fn the_steeman_provider_is_disabled_when_it_is_not_configured() {
+    let decoded: Config = serde_json::from_str("{}").unwrap();
+
+    assert!(!decoded.providers.steeman_enabled());
+}
+
+#[test]
+fn the_steeman_provider_is_disabled_when_it_is_not_enabled() {
+    let decoded: Config =
+        serde_json::from_str("{\"providers\":{\"steeman\":{\"enabled\":false}}}").unwrap();
+
+    assert!(!decoded.providers.steeman_enabled());
 }
 
 #[test]

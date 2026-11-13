@@ -192,9 +192,16 @@ async fn a_list_that_cannot_be_read_keeps_the_previous_one() {
         .mount(&server)
         .await;
 
+    let mut config = config_for_spamhaus(&server.uri());
+    config.providers.spamhaus = Some(SpamhausConfig {
+        enabled: true,
+        min_refresh_interval: Some(Duration::from_secs(60 * 60)),
+        base_url: Some(server.uri()),
+    });
+
     let clock = TestClock::new(now());
     let bots = BadBots::builder()
-        .config(config_for_spamhaus(&server.uri()))
+        .config(config)
         .clock(Arc::new(clock.clone()))
         .build()
         .expect("the library is built");
@@ -418,7 +425,7 @@ async fn the_status_reports_the_entries_and_the_next_refresh() {
     );
     assert_eq!(
         status.next_refresh_at,
-        Some(now() + Duration::from_secs(60 * 60))
+        Some(now() + Duration::from_secs(24 * 60 * 60))
     );
     assert!(status.last_success.is_some());
 }
@@ -601,6 +608,86 @@ async fn one_family_never_convicts_and_two_families_do() {
     bots.refresh_feeds().await;
     let verdict = bots.verify_ip(address("45.32.1.1")).await;
     assert_eq!(verdict.classification, Classification::Bad);
+}
+
+#[tokio::test]
+async fn every_list_provider_waits_a_day_by_default() {
+    let server = MockServer::start().await;
+
+    for (route, body) in [
+        ("/drop_v4.json", fixture("spamhaus/drop_v4.json")),
+        ("/drop_v6.json", fixture("spamhaus/drop_v6.json")),
+        ("/block.txt", fixture("dshield/block.txt")),
+        ("/threatintel.txt", fixture("dshield/threatintel.txt")),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(route))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+    }
+
+    for service in [
+        "all",
+        "ssh",
+        "apache",
+        "imap",
+        "ftp",
+        "sip",
+        "bots",
+        "bruteforcelogin",
+        "strongips",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/lists/{service}.txt")))
+            .respond_with(ResponseTemplate::new(200).set_body_string("45.32.1.1\n"))
+            .mount(&server)
+            .await;
+    }
+
+    let mut config = Config::default();
+    config.providers.spamhaus = Some(SpamhausConfig {
+        enabled: true,
+        min_refresh_interval: None,
+        base_url: Some(server.uri()),
+    });
+    config.providers.dshield = Some(DShieldConfig {
+        enabled: true,
+        min_refresh_interval: None,
+        user_agent: None,
+        base_url: Some(server.uri()),
+    });
+    config.providers.blocklist_de = Some(BlocklistDeConfig {
+        enabled: true,
+        window: None,
+        min_refresh_interval: None,
+        use_per_address_query: false,
+        use_service_lists: true,
+        daily_quota: None,
+        api_base_url: None,
+        lists_base_url: Some(server.uri()),
+    });
+
+    let bots = BadBots::builder()
+        .config(config)
+        .clock(Arc::new(TestClock::new(now())))
+        .build()
+        .expect("the library is built");
+
+    bots.refresh_feeds().await;
+
+    for provider in [
+        ProviderId::SPAMHAUS,
+        ProviderId::DSHIELD,
+        ProviderId::BLOCKLIST_DE_LISTS,
+    ] {
+        let status = status_of(&bots, provider.clone());
+        assert_eq!(
+            status.next_refresh_at,
+            Some(now() + Duration::from_secs(24 * 60 * 60)),
+            "{provider} waits a day"
+        );
+    }
 }
 
 #[tokio::test]

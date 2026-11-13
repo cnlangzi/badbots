@@ -53,7 +53,7 @@ let bots = BadBots::builder()
 | Statement | Kind |
 |---|---|
 | The publisher asks for no more than one download per hour | Publisher statement (upstream documentation) |
-| The local minimum interval defaults to one hour | Configuration default of this library |
+| The local minimum interval defaults to 24 hours | Configuration default of this library |
 | A refresh inside the minimum interval issues no request and is reported with the time that is left | Behaviour of this library |
 | The local budget guard allows 10,000 requests per day | Configuration default of this library |
 
@@ -124,7 +124,7 @@ category `GenericAbuse`.
 | The list of the subnets covers | The three days before the publication time |
 | A subnet observation expires | 3 days after the publication time |
 | An address observation expires | 7 days after the last sighting |
-| The lists may be fetched again | One hour after the last refresh, whether it succeeded or not |
+| The lists may be fetched again | 24 hours after the last refresh, whether it succeeded or not |
 
 The publisher writes the publication time in ISO 8601, with or without an
 offset. The header of `block.txt` names it `updated`, the header of

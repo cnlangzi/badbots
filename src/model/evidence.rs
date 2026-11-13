@@ -25,6 +25,8 @@ impl ProviderId {
     pub const BLOCKLIST_DE_LISTS: Self = Self(Cow::Borrowed("blocklist_de_lists"));
     /// The DShield list provider.
     pub const DSHIELD: Self = Self(Cow::Borrowed("dshield"));
+    /// The steeman list provider.
+    pub const STEEMAN: Self = Self(Cow::Borrowed("steeman"));
 
     /// Creates an identifier for a provider.
     pub fn new(id: impl Into<Cow<'static, str>>) -> Self {
@@ -66,6 +68,8 @@ impl SourceFamily {
     pub const BLOCKLIST_DE: Self = Self(Cow::Borrowed("blocklist_de"));
     /// The DShield lineage.
     pub const DSHIELD: Self = Self(Cow::Borrowed("dshield"));
+    /// The steeman lineage.
+    pub const STEEMAN: Self = Self(Cow::Borrowed("steeman"));
 
     /// Creates a family identifier.
     pub fn new(family: impl Into<Cow<'static, str>>) -> Self {

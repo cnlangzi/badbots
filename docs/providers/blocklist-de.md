@@ -48,7 +48,7 @@ Both parts can be switched off separately through
 |---|---|
 | The publisher states no rate limit for the per-address query | Publisher statement (upstream documentation) |
 | The publisher asks for no more than one download of the lists per half hour | Publisher statement (upstream documentation) |
-| The local minimum interval of the lists defaults to 30 minutes | Configuration default of this library |
+| The local minimum interval of the lists defaults to 24 hours | Configuration default of this library |
 | The local budget guard allows 10,000 queries per day | Configuration default of this library |
 
 The query costs one request per verification per address. The budget is
@@ -101,7 +101,7 @@ observation of the union.
 | The interval the query asks about | 48 hours ending at the query, configurable through `BlocklistDeConfig::window` |
 | A list observation of `strongips` expires | 7 days after the retrieval |
 | A list observation of the other lists expires | 48 hours after the retrieval |
-| The lists may be fetched again | 30 minutes after the last refresh, whether it succeeded or not |
+| The lists may be fetched again | 24 hours after the last refresh, whether it succeeded or not |
 
 The library expires the answer of the query at the earlier of the expiry the
 publisher declares and the host bound, so a claim is never kept for longer

@@ -41,7 +41,7 @@ they lag the JSON lists.
 | Statement | Kind |
 |---|---|
 | The publisher asks for no more than one download per hour | Publisher statement (upstream documentation) |
-| The local minimum interval defaults to one hour | Configuration default of this library |
+| The local minimum interval defaults to 24 hours | Configuration default of this library |
 | A refresh inside the minimum interval issues no request and is reported with the time that is left | Behaviour of this library |
 | The local budget guard allows 10,000 requests per day | Configuration default of this library |
 
@@ -72,10 +72,15 @@ An observation about a network has the scope `Prefix`, the assertion
 | Rule | Value |
 |---|---|
 | An observation expires | 26 hours after the publication time |
-| The list may be fetched again | One hour after the last refresh, whether it succeeded or not |
+| The list may be fetched again | 24 hours after the last refresh, whether it succeeded or not |
 
 The publisher states that the list is refreshed daily. The 26 hours leave room
 for the publication of the list to be late without the data becoming stale.
+
+The observations of the list expire 26 hours after its publication, and the
+next download happens 24 hours after the last one. A download that fails
+therefore leaves the library without observations of the list until the next
+download succeeds.
 
 ## Terms and attribution
 

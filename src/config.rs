@@ -181,6 +181,24 @@ pub struct DShieldConfig {
     pub base_url: Option<String>,
 }
 
+/// The steeman list provider.
+///
+/// The upstream publishes the addresses his own intrusion detection systems
+/// saw attacking. The list is published for everyone and expects no
+/// credential.
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub struct SteemanConfig {
+    /// Whether the provider is queried.
+    #[serde(default)]
+    pub enabled: bool,
+    /// The shortest interval between two refreshes.
+    #[serde(default)]
+    pub min_refresh_interval: Option<Duration>,
+    /// The base URL of the list.
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
 /// The configuration of every supported provider.
 ///
 /// A provider is only compiled in by its own crate feature. A provider that is
@@ -204,6 +222,9 @@ pub struct ProviderConfig {
     /// The DShield list provider.
     #[serde(default)]
     pub dshield: Option<DShieldConfig>,
+    /// The steeman list provider.
+    #[serde(default)]
+    pub steeman: Option<SteemanConfig>,
 }
 
 /// The configuration of the library.
@@ -299,6 +320,8 @@ pub const SPAMHAUS_FEATURE: &str = "spamhaus";
 pub const BLOCKLIST_DE_FEATURE: &str = "blocklist_de";
 /// The identifier of the DShield provider.
 pub const DSHIELD_FEATURE: &str = "dshield";
+/// The identifier of the steeman provider.
+pub const STEEMAN_FEATURE: &str = "steeman";
 
 /// The upstream endpoint of the AbuseIPDB check API.
 pub const ABUSEIPDB_DEFAULT_BASE_URL: &str = "https://api.abuseipdb.com/api/v2";
@@ -312,6 +335,8 @@ pub const BLOCKLIST_DE_DEFAULT_API_BASE_URL: &str = "https://api.blocklist.de";
 pub const BLOCKLIST_DE_DEFAULT_LISTS_BASE_URL: &str = "https://lists.blocklist.de";
 /// The upstream endpoint of the DShield lists.
 pub const DSHIELD_DEFAULT_BASE_URL: &str = "https://feeds.dshield.org";
+/// The upstream endpoint of the steeman list.
+pub const STEEMAN_DEFAULT_BASE_URL: &str = "https://www.steeman.org";
 
 /// The default daily budget of the AbuseIPDB provider.
 pub const ABUSEIPDB_DEFAULT_DAILY_QUOTA: u32 = 1_000;
@@ -328,11 +353,13 @@ pub const BLOCKLIST_DE_DEFAULT_DAILY_QUOTA: u32 = 10_000;
 pub const FEED_DEFAULT_DAILY_QUOTA: u32 = 10_000;
 
 /// The shortest interval between two Spamhaus refreshes.
-pub const SPAMHAUS_DEFAULT_MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
+pub const SPAMHAUS_DEFAULT_MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// The shortest interval between two Blocklist.de refreshes.
-pub const BLOCKLIST_DE_DEFAULT_MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
+pub const BLOCKLIST_DE_DEFAULT_MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// The shortest interval between two DShield refreshes.
-pub const DSHIELD_DEFAULT_MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
+pub const DSHIELD_DEFAULT_MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+/// The shortest interval between two steeman refreshes.
+pub const STEEMAN_DEFAULT_MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// The interval the Blocklist.de per-address query asks about.
 pub const BLOCKLIST_DE_DEFAULT_WINDOW: Duration = Duration::from_secs(48 * 60 * 60);
 
@@ -360,6 +387,11 @@ impl ProviderConfig {
     /// Whether the DShield provider is configured and enabled.
     pub fn dshield_enabled(&self) -> bool {
         self.dshield.as_ref().is_some_and(|c| c.enabled)
+    }
+
+    /// Whether the steeman provider is configured and enabled.
+    pub fn steeman_enabled(&self) -> bool {
+        self.steeman.as_ref().is_some_and(|c| c.enabled)
     }
 }
 
