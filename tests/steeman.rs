@@ -36,6 +36,16 @@ fn address(text: &str) -> IpAddr {
     text.parse().unwrap()
 }
 
+/// The address an observation is about.
+fn address_of(entry: &badbots::Evidence) -> Option<&str> {
+    entry.upstream_values.get("address").map(String::as_str)
+}
+
+/// The addresses the observations of a snapshot are about.
+fn addresses_of(snapshot: &badbots::FeedSnapshot) -> Vec<&str> {
+    snapshot.entries.iter().filter_map(address_of).collect()
+}
+
 /// The observation about an address.
 fn observation_of<'a>(
     snapshot: &'a badbots::FeedSnapshot,
@@ -44,7 +54,20 @@ fn observation_of<'a>(
     snapshot
         .entries
         .iter()
-        .find(|entry| entry.upstream_values.get("address").map(String::as_str) == Some(address))
+        .find(|entry| address_of(entry) == Some(address))
+}
+
+/// The mock server that serves the list.
+async fn server_for(body: &str) -> MockServer {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path(LIST_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .mount(&server)
+        .await;
+
+    server
 }
 
 /// A provider that reads the list of the mock server.
@@ -54,13 +77,7 @@ async fn provider_for(body: &str) -> (MockServer, SteemanProvider) {
 
 /// A provider that reads the list of the mock server at a given instant.
 async fn provider_for_at(body: &str, now: OffsetDateTime) -> (MockServer, SteemanProvider) {
-    let server = MockServer::start().await;
-
-    Mock::given(method("GET"))
-        .and(path(LIST_PATH))
-        .respond_with(ResponseTemplate::new(200).set_body_string(body.to_string()))
-        .mount(&server)
-        .await;
+    let server = server_for(body).await;
 
     let runtime = Arc::new(ProviderRuntime::new(
         common::client(),
@@ -71,6 +88,19 @@ async fn provider_for_at(body: &str, now: OffsetDateTime) -> (MockServer, Steema
     let provider = SteemanProvider::new(server.uri(), Duration::from_secs(24 * 60 * 60), runtime);
 
     (server, provider)
+}
+
+/// A library that reads the list of the publisher.
+async fn library_for(body: &str) -> (MockServer, BadBots) {
+    let server = server_for(body).await;
+
+    let bots = BadBots::builder()
+        .config(config_for(&server.uri()))
+        .clock(Arc::new(TestClock::new(now())))
+        .build()
+        .expect("the library is built");
+
+    (server, bots)
 }
 
 /// The status of the steeman provider.
@@ -168,9 +198,7 @@ async fn a_range_is_no_observation() {
     let (_server, provider) = provider_for(&fixture("steeman/odd_lines.txt")).await;
     let snapshot = provider.fetch().await.expect("the list is read");
 
-    assert_eq!(snapshot.entries.len(), 2);
-    assert!(observation_of(&snapshot, "45.32.1.10").is_some());
-    assert!(observation_of(&snapshot, "45.32.1.11").is_some());
+    assert_eq!(addresses_of(&snapshot), vec!["45.32.1.10", "45.32.1.11"]);
 }
 
 #[tokio::test]
@@ -178,9 +206,7 @@ async fn a_malformed_token_is_no_observation() {
     let (_server, provider) = provider_for(&fixture("steeman/odd_lines.txt")).await;
     let snapshot = provider.fetch().await.expect("the list is read");
 
-    assert!(snapshot.entries.iter().all(|entry| {
-        entry.upstream_values.get("address").map(String::as_str) != Some("not-an-address")
-    }));
+    assert!(!addresses_of(&snapshot).contains(&"not-an-address"));
 }
 
 #[tokio::test]
@@ -188,9 +214,7 @@ async fn two_addresses_glued_together_are_no_observation() {
     let (_server, provider) = provider_for(&fixture("steeman/odd_lines.txt")).await;
     let snapshot = provider.fetch().await.expect("the list is read");
 
-    assert!(snapshot.entries.iter().all(|entry| {
-        entry.upstream_values.get("address").map(String::as_str) != Some("45.32.1.1345.32.1.14")
-    }));
+    assert!(!addresses_of(&snapshot).contains(&"45.32.1.1345.32.1.14"));
 }
 
 #[tokio::test]
@@ -251,20 +275,7 @@ async fn the_attribution_names_the_publisher_and_his_terms() {
 
 #[tokio::test]
 async fn the_list_alone_never_convicts() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path(LIST_PATH))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_string(fixture("steeman/Level2_IP_Block_List.txt")),
-        )
-        .mount(&server)
-        .await;
-
-    let bots = BadBots::builder()
-        .config(config_for(&server.uri()))
-        .clock(Arc::new(TestClock::new(now())))
-        .build()
-        .expect("the library is built");
+    let (_server, bots) = library_for(&fixture("steeman/Level2_IP_Block_List.txt")).await;
 
     bots.refresh_feeds().await;
 
@@ -282,14 +293,7 @@ async fn the_list_alone_never_convicts() {
 
 #[tokio::test]
 async fn the_list_convicts_under_the_lenient_policy() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path(LIST_PATH))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_string(fixture("steeman/Level2_IP_Block_List.txt")),
-        )
-        .mount(&server)
-        .await;
+    let server = server_for(&fixture("steeman/Level2_IP_Block_List.txt")).await;
 
     let bots = BadBots::builder()
         .config(config_for(&server.uri()))
@@ -307,20 +311,7 @@ async fn the_list_convicts_under_the_lenient_policy() {
 
 #[tokio::test]
 async fn the_status_reports_the_provider_and_the_next_refresh() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path(LIST_PATH))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_string(fixture("steeman/Level2_IP_Block_List.txt")),
-        )
-        .mount(&server)
-        .await;
-
-    let bots = BadBots::builder()
-        .config(config_for(&server.uri()))
-        .clock(Arc::new(TestClock::new(now())))
-        .build()
-        .expect("the library is built");
+    let (_server, bots) = library_for(&fixture("steeman/Level2_IP_Block_List.txt")).await;
 
     bots.refresh_feeds().await;
 
@@ -338,20 +329,7 @@ async fn the_status_reports_the_provider_and_the_next_refresh() {
 
 #[tokio::test]
 async fn the_attribution_of_the_loaded_list_is_reachable() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path(LIST_PATH))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_string(fixture("steeman/Level2_IP_Block_List.txt")),
-        )
-        .mount(&server)
-        .await;
-
-    let bots = BadBots::builder()
-        .config(config_for(&server.uri()))
-        .clock(Arc::new(TestClock::new(now())))
-        .build()
-        .expect("the library is built");
+    let (_server, bots) = library_for(&fixture("steeman/Level2_IP_Block_List.txt")).await;
 
     bots.refresh_feeds().await;
 
@@ -363,20 +341,7 @@ async fn the_attribution_of_the_loaded_list_is_reachable() {
 
 #[tokio::test]
 async fn an_address_of_the_other_family_is_only_partially_covered() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path(LIST_PATH))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_string(fixture("steeman/Level2_IP_Block_List.txt")),
-        )
-        .mount(&server)
-        .await;
-
-    let bots = BadBots::builder()
-        .config(config_for(&server.uri()))
-        .clock(Arc::new(TestClock::new(now())))
-        .build()
-        .expect("the library is built");
+    let (_server, bots) = library_for(&fixture("steeman/Level2_IP_Block_List.txt")).await;
 
     bots.refresh_feeds().await;
 

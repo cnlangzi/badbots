@@ -243,10 +243,9 @@ fn parse_publication_time(text: &str) -> Option<OffsetDateTime> {
     let mut meridiem = None;
     let mut zone = None;
     for token in tokens {
-        if is_meridiem(token) {
-            meridiem = Some(token);
-        } else {
-            zone = Some(token);
+        match meridiem_of(token) {
+            Some(period) => meridiem = Some(period),
+            None => zone = Some(token),
         }
     }
 
@@ -304,16 +303,22 @@ fn hour_of_meridiem(hour: u8, meridiem: &str) -> Option<u8> {
         return None;
     }
 
-    match meridiem.to_ascii_uppercase().as_str() {
+    match meridiem {
         "AM" => Some(if hour == 12 { 0 } else { hour }),
         "PM" => Some(if hour == 12 { 12 } else { hour + 12 }),
         _ => None,
     }
 }
 
-/// Whether the token names the meridiem.
-fn is_meridiem(text: &str) -> bool {
-    matches!(text.to_ascii_uppercase().as_str(), "AM" | "PM")
+/// The meridiem a token names, if it names one.
+///
+/// The case of the token does not matter.
+fn meridiem_of(text: &str) -> Option<&'static str> {
+    match text.to_ascii_uppercase().as_str() {
+        "AM" => Some("AM"),
+        "PM" => Some("PM"),
+        _ => None,
+    }
 }
 
 /// The offset the publisher states.
