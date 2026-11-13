@@ -232,6 +232,7 @@ it produced an observation for is `definitive`, an address it did not match is
 | [Spamhaus DROP](docs/providers/spamhaus.md) | `spamhaus` | Corroborating | — | 10,000 per day | No, a listing is a statement about a range |
 | [DShield](docs/providers/dshield.md) | `dshield` | Corroborating | — | 10,000 per day | No, only an attack record adds a vote |
 | [steeman](docs/providers/steeman.md) | `steeman` | Corroborating | — | 10,000 per day | No, the list only adds a vote |
+| [CINS Army list](docs/providers/cins.md) | `cins` | Corroborating | — | 10,000 per day | No, the list only adds a vote |
 
 Every provider is opt-in twice over: the Cargo feature has to be compiled in
 **and** the configuration has to enable the provider. A provider that is
@@ -274,9 +275,10 @@ point, so the coverage it reports is the coverage a verification would report.
 
 ## The list providers
 
-Four of the providers publish a list instead of answering about one address:
-Spamhaus DROP, the Blocklist.de service lists, DShield and steeman. The library
-never fetches a list on its own; the host decides when that happens:
+Five of the providers publish a list instead of answering about one address:
+Spamhaus DROP, the Blocklist.de service lists, DShield, steeman and the CINS
+Army list. The library never fetches a list on its own; the host decides when
+that happens:
 
 ```rust
 let report = bots.refresh_feeds().await;
@@ -298,6 +300,7 @@ publisher that is unreachable does not empty the index.
 | Blocklist.de service lists | 24 hours |
 | DShield | 24 hours |
 | steeman | 24 hours |
+| CINS Army list | 24 hours |
 
 A list never convicts an address on its own under the strict policy. Two
 observations of the same source family count as one vote, so a list and a
@@ -556,6 +559,7 @@ below are publisher statements about the sources themselves:
 | Blocklist.de publishes the attack events its partner's sensors observed, per address and per service | Publisher statement (upstream documentation) |
 | DShield publishes the subnets and the addresses its sensors saw scanning or attacking | Publisher statement (upstream documentation) |
 | steeman publishes the addresses his own intrusion detection systems saw attacking | Publisher statement (upstream documentation) |
+| CINS publishes the addresses whose recent reputation is very poor or that tripped a designated number of trusted alerts on the global Sentinel sensors | Publisher statement (upstream documentation) |
 | The share of observed malicious traffic that carries a `Bad` verdict is in the single-digit percentage range | Expectation derived from the design of the sources. No independent measurement exists |
 
 The coverage is short by design. The sources report addresses that a community

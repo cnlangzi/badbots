@@ -32,6 +32,7 @@
 //! |---|---|
 //! | `abuseipdb` | AbuseIPDB |
 //! | `blocklist_de` | Blocklist.de |
+//! | `cins` | CINS Army list |
 //! | `crowdsec` | CrowdSec CTI |
 //! | `dshield` | DShield |
 //! | `spamhaus` | Spamhaus DROP |
@@ -41,8 +42,8 @@
 //! The crate enables no provider by default. A provider is opt-in twice over:
 //! its crate feature has to be compiled in, and the configuration has to enable
 //! it. The AbuseIPDB and the CrowdSec provider expect an API key; the
-//! Spamhaus, the Blocklist.de, the DShield and the steeman provider expect
-//! none.
+//! Spamhaus, the Blocklist.de, the DShield, the steeman and the CINS provider
+//! expect none.
 //!
 //! Every provider that publishes a list waits 24 hours between two downloads.
 //! The interval bounds every attempt, a failed one included, and it stays
@@ -115,7 +116,8 @@ pub use config::{
     ABUSEIPDB_FEATURE, AbuseIpdbConfig, BLOCKLIST_DE_DEFAULT_API_BASE_URL,
     BLOCKLIST_DE_DEFAULT_DAILY_QUOTA, BLOCKLIST_DE_DEFAULT_LISTS_BASE_URL,
     BLOCKLIST_DE_DEFAULT_MIN_REFRESH_INTERVAL, BLOCKLIST_DE_DEFAULT_WINDOW, BLOCKLIST_DE_FEATURE,
-    BlocklistDeConfig, CROWDSEC_DEFAULT_BASE_URL, CROWDSEC_DEFAULT_MONTHLY_QUOTA, CROWDSEC_FEATURE,
+    BlocklistDeConfig, CINS_DEFAULT_BASE_URL, CINS_DEFAULT_MIN_REFRESH_INTERVAL, CINS_FEATURE,
+    CROWDSEC_DEFAULT_BASE_URL, CROWDSEC_DEFAULT_MONTHLY_QUOTA, CROWDSEC_FEATURE, CinsConfig,
     Config, CrowdSecConfig, DSHIELD_DEFAULT_BASE_URL, DSHIELD_DEFAULT_MIN_REFRESH_INTERVAL,
     DSHIELD_FEATURE, DShieldConfig, EvidencePolicy, FEED_DEFAULT_DAILY_QUOTA, NetworkScopePolicy,
     ProviderConfig, SPAMHAUS_DEFAULT_BASE_URL, SPAMHAUS_DEFAULT_MIN_REFRESH_INTERVAL,
@@ -801,6 +803,10 @@ impl Shared {
             configured.push((ProviderId::STEEMAN, SourceFamily::STEEMAN, provider.enabled));
         }
 
+        if let Some(provider) = &self.config.providers.cins {
+            configured.push((ProviderId::CINS, SourceFamily::CINS, provider.enabled));
+        }
+
         if let Some(provider) = &self.config.providers.blocklist_de
             && provider.use_service_lists
         {
@@ -1015,6 +1021,21 @@ impl BadBotsBuilder {
         self
     }
 
+    /// Enables the CINS provider.
+    ///
+    /// The provider is compiled in by the `cins` crate feature. Without that
+    /// feature the provider is not compiled in, and the build of the library
+    /// fails with [`ConfigError::MissingFeature`].
+    pub fn enable_cins(mut self) -> Self {
+        let provider = self
+            .config
+            .providers
+            .cins
+            .get_or_insert_with(CinsConfig::default);
+        provider.enabled = true;
+        self
+    }
+
     /// Sets the timeout of a single provider request.
     pub fn request_timeout(mut self, timeout: Duration) -> Self {
         self.config.request_timeout = timeout;
@@ -1090,10 +1111,11 @@ impl BadBotsBuilder {
     /// The provider is named by its identifier: [`ProviderId::ABUSEIPDB`],
     /// [`ProviderId::CROWDSEC`], [`ProviderId::BLOCKLIST_DE`],
     /// [`ProviderId::BLOCKLIST_DE_LISTS`], [`ProviderId::SPAMHAUS`],
-    /// [`ProviderId::DSHIELD`] and [`ProviderId::STEEMAN`]. The per-address
-    /// query and the service lists of Blocklist.de are two providers with two
-    /// budgets, so a budget for [`ProviderId::BLOCKLIST_DE`] does not bound the
-    /// lists of [`ProviderId::BLOCKLIST_DE_LISTS`].
+    /// [`ProviderId::DSHIELD`], [`ProviderId::STEEMAN`] and [`ProviderId::CINS`].
+    /// The per-address query and the service lists of Blocklist.de are two
+    /// providers with two budgets, so a budget for
+    /// [`ProviderId::BLOCKLIST_DE`] does not bound the lists of
+    /// [`ProviderId::BLOCKLIST_DE_LISTS`].
     ///
     /// The budget replaces the one the configuration describes: the
     /// `daily_quota` of AbuseIPDB and of Blocklist.de, the `monthly_quota` of
@@ -1332,6 +1354,13 @@ impl BadBotsBuilder {
             return Err(ConfigError::MissingFeature {
                 provider: ProviderId::STEEMAN,
                 feature: STEEMAN_FEATURE,
+            });
+        }
+
+        if config.providers.cins_enabled() && !cfg!(feature = "cins") {
+            return Err(ConfigError::MissingFeature {
+                provider: ProviderId::CINS,
+                feature: CINS_FEATURE,
             });
         }
 
@@ -1592,6 +1621,7 @@ fn registered_providers(
     not(any(
         feature = "spamhaus",
         feature = "blocklist_de",
+        feature = "cins",
         feature = "dshield",
         feature = "steeman"
     )),
@@ -1741,6 +1771,38 @@ fn registered_feed_providers(
         }
     }
 
+    #[cfg(feature = "cins")]
+    {
+        if config.providers.cins_enabled() {
+            let provider_config = config
+                .providers
+                .cins
+                .as_ref()
+                .expect("the provider is enabled");
+            let quota = budget_for(budgets, &ProviderId::CINS, || {
+                daily_guard(FEED_DEFAULT_DAILY_QUOTA)
+            });
+            let runtime = Arc::new(ProviderRuntime::new(
+                client.clone(),
+                quota,
+                config.request_timeout,
+                Arc::clone(clock),
+            ));
+            let provider = provider::cins::CinsProvider::new(
+                provider_config
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| CINS_DEFAULT_BASE_URL.to_string()),
+                provider_config
+                    .min_refresh_interval
+                    .unwrap_or(CINS_DEFAULT_MIN_REFRESH_INTERVAL),
+                Arc::clone(&runtime),
+            );
+            runtimes.insert(ProviderId::CINS, Arc::clone(&runtime));
+            registered.push(Arc::new(provider));
+        }
+    }
+
     registered
 }
 
@@ -1754,6 +1816,7 @@ fn registered_feed_providers(
     not(any(
         feature = "abuseipdb",
         feature = "blocklist_de",
+        feature = "cins",
         feature = "crowdsec",
         feature = "dshield",
         feature = "spamhaus",

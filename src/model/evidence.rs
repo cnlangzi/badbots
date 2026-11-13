@@ -27,6 +27,8 @@ impl ProviderId {
     pub const DSHIELD: Self = Self(Cow::Borrowed("dshield"));
     /// The steeman list provider.
     pub const STEEMAN: Self = Self(Cow::Borrowed("steeman"));
+    /// The CINS Army list provider.
+    pub const CINS: Self = Self(Cow::Borrowed("cins"));
 
     /// Creates an identifier for a provider.
     pub fn new(id: impl Into<Cow<'static, str>>) -> Self {
@@ -70,6 +72,8 @@ impl SourceFamily {
     pub const DSHIELD: Self = Self(Cow::Borrowed("dshield"));
     /// The steeman lineage.
     pub const STEEMAN: Self = Self(Cow::Borrowed("steeman"));
+    /// The CINS Army list lineage.
+    pub const CINS: Self = Self(Cow::Borrowed("cins"));
 
     /// Creates a family identifier.
     pub fn new(family: impl Into<Cow<'static, str>>) -> Self {

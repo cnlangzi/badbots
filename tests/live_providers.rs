@@ -462,6 +462,22 @@ async fn check_steeman() -> Outcome {
     check_feed(ProviderId::STEEMAN, bots, true).await
 }
 
+/// Checks the CINS provider.
+#[cfg(feature = "cins")]
+async fn check_cins() -> Outcome {
+    let bots = match BadBots::builder()
+        .config(Config::default())
+        .enable_cins()
+        .request_timeout(REQUEST_TIMEOUT)
+        .build()
+    {
+        Ok(bots) => bots,
+        Err(error) => return Outcome::Broken(format!("the library was not built: {error}")),
+    };
+
+    check_feed(ProviderId::CINS, bots, false).await
+}
+
 /// The AbuseIPDB provider answers about the probe address.
 #[cfg(feature = "abuseipdb")]
 #[tokio::test]
@@ -522,4 +538,12 @@ async fn the_dshield_lists_are_fetched() {
 #[ignore = "contacts the live steeman upstream"]
 async fn the_steeman_list_is_fetched() {
     finish(ProviderId::STEEMAN.as_str(), check_steeman().await);
+}
+
+/// The CINS Army list is fetched.
+#[cfg(feature = "cins")]
+#[tokio::test]
+#[ignore = "contacts the live CINS upstream"]
+async fn the_cins_list_is_fetched() {
+    finish(ProviderId::CINS.as_str(), check_cins().await);
 }

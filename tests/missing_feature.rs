@@ -96,3 +96,20 @@ fn the_steeman_provider_without_its_feature_is_reported() {
         }
     );
 }
+
+#[cfg(not(feature = "cins"))]
+#[test]
+fn the_cins_provider_without_its_feature_is_reported() {
+    let error = BadBots::builder()
+        .enable_cins()
+        .build()
+        .expect_err("the provider feature is missing");
+
+    assert_eq!(
+        error,
+        ConfigError::MissingFeature {
+            provider: ProviderId::CINS,
+            feature: "cins",
+        }
+    );
+}

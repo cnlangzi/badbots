@@ -1,0 +1,4 @@
+# CINS Army list of high-risk IP addresses
+1.12.229.231
+1.15.14.29
+45.32.1.1

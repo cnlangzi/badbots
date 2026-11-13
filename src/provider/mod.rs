@@ -6,13 +6,14 @@
 //! |---|---|
 //! | `abuseipdb` | `provider::abuseipdb` |
 //! | `blocklist_de` | `provider::blocklist_de` |
+//! | `cins` | `provider::cins` |
 //! | `crowdsec` | `provider::crowdsec` |
 //! | `dshield` | `provider::dshield` |
 //! | `spamhaus` | `provider::spamhaus` |
 //! | `steeman` | `provider::steeman` |
 //!
 //! The crate enables none of them by default, and the `full` feature enables
-//! all six.
+//! all seven.
 
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -32,6 +33,8 @@ pub mod services;
 pub mod abuseipdb;
 #[cfg(feature = "blocklist_de")]
 pub mod blocklist_de;
+#[cfg(feature = "cins")]
+pub mod cins;
 #[cfg(feature = "crowdsec")]
 pub mod crowdsec;
 #[cfg(feature = "dshield")]
