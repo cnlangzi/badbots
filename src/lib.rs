@@ -35,12 +35,18 @@
 //! | `crowdsec` | CrowdSec CTI |
 //! | `dshield` | DShield |
 //! | `spamhaus` | Spamhaus DROP |
+//! | `steeman` | steeman |
 //! | `full` | every provider above |
 //!
 //! The crate enables no provider by default. A provider is opt-in twice over:
 //! its crate feature has to be compiled in, and the configuration has to enable
 //! it. The AbuseIPDB and the CrowdSec provider expect an API key; the
-//! Spamhaus, the Blocklist.de and the DShield provider expect none.
+//! Spamhaus, the Blocklist.de, the DShield and the steeman provider expect
+//! none.
+//!
+//! Every provider that publishes a list waits 24 hours between two downloads.
+//! The interval bounds every attempt, a failed one included, and it stays
+//! configurable per provider.
 //!
 //! # Usage
 //!
@@ -113,7 +119,8 @@ pub use config::{
     Config, CrowdSecConfig, DSHIELD_DEFAULT_BASE_URL, DSHIELD_DEFAULT_MIN_REFRESH_INTERVAL,
     DSHIELD_FEATURE, DShieldConfig, EvidencePolicy, FEED_DEFAULT_DAILY_QUOTA, NetworkScopePolicy,
     ProviderConfig, SPAMHAUS_DEFAULT_BASE_URL, SPAMHAUS_DEFAULT_MIN_REFRESH_INTERVAL,
-    SPAMHAUS_FEATURE, SpamhausConfig, UserAgentConfig,
+    SPAMHAUS_FEATURE, STEEMAN_DEFAULT_BASE_URL, STEEMAN_DEFAULT_MIN_REFRESH_INTERVAL,
+    STEEMAN_FEATURE, SpamhausConfig, SteemanConfig, UserAgentConfig,
 };
 pub use engine::classify;
 pub use error::{ConfigError, ProviderError};
@@ -790,6 +797,10 @@ impl Shared {
             configured.push((ProviderId::DSHIELD, SourceFamily::DSHIELD, provider.enabled));
         }
 
+        if let Some(provider) = &self.config.providers.steeman {
+            configured.push((ProviderId::STEEMAN, SourceFamily::STEEMAN, provider.enabled));
+        }
+
         if let Some(provider) = &self.config.providers.blocklist_de
             && provider.use_service_lists
         {
@@ -989,6 +1000,21 @@ impl BadBotsBuilder {
         self
     }
 
+    /// Enables the steeman provider.
+    ///
+    /// The provider is compiled in by the `steeman` crate feature. Without that
+    /// feature the provider is not compiled in, and the build of the library
+    /// fails with [`ConfigError::MissingFeature`].
+    pub fn enable_steeman(mut self) -> Self {
+        let provider = self
+            .config
+            .providers
+            .steeman
+            .get_or_insert_with(SteemanConfig::default);
+        provider.enabled = true;
+        self
+    }
+
     /// Sets the timeout of a single provider request.
     pub fn request_timeout(mut self, timeout: Duration) -> Self {
         self.config.request_timeout = timeout;
@@ -1063,11 +1089,11 @@ impl BadBotsBuilder {
     ///
     /// The provider is named by its identifier: [`ProviderId::ABUSEIPDB`],
     /// [`ProviderId::CROWDSEC`], [`ProviderId::BLOCKLIST_DE`],
-    /// [`ProviderId::BLOCKLIST_DE_LISTS`], [`ProviderId::SPAMHAUS`] and
-    /// [`ProviderId::DSHIELD`]. The per-address query and the service lists of
-    /// Blocklist.de are two providers with two budgets, so a budget for
-    /// [`ProviderId::BLOCKLIST_DE`] does not bound the lists of
-    /// [`ProviderId::BLOCKLIST_DE_LISTS`].
+    /// [`ProviderId::BLOCKLIST_DE_LISTS`], [`ProviderId::SPAMHAUS`],
+    /// [`ProviderId::DSHIELD`] and [`ProviderId::STEEMAN`]. The per-address
+    /// query and the service lists of Blocklist.de are two providers with two
+    /// budgets, so a budget for [`ProviderId::BLOCKLIST_DE`] does not bound the
+    /// lists of [`ProviderId::BLOCKLIST_DE_LISTS`].
     ///
     /// The budget replaces the one the configuration describes: the
     /// `daily_quota` of AbuseIPDB and of Blocklist.de, the `monthly_quota` of
@@ -1299,6 +1325,13 @@ impl BadBotsBuilder {
             return Err(ConfigError::MissingFeature {
                 provider: ProviderId::DSHIELD,
                 feature: DSHIELD_FEATURE,
+            });
+        }
+
+        if config.providers.steeman_enabled() && !cfg!(feature = "steeman") {
+            return Err(ConfigError::MissingFeature {
+                provider: ProviderId::STEEMAN,
+                feature: STEEMAN_FEATURE,
             });
         }
 
@@ -1556,7 +1589,12 @@ fn registered_providers(
 
 /// The list providers the configuration asks for.
 #[cfg_attr(
-    not(any(feature = "spamhaus", feature = "blocklist_de", feature = "dshield")),
+    not(any(
+        feature = "spamhaus",
+        feature = "blocklist_de",
+        feature = "dshield",
+        feature = "steeman"
+    )),
     allow(unused_variables, unused_mut)
 )]
 fn registered_feed_providers(
@@ -1671,6 +1709,38 @@ fn registered_feed_providers(
         }
     }
 
+    #[cfg(feature = "steeman")]
+    {
+        if config.providers.steeman_enabled() {
+            let provider_config = config
+                .providers
+                .steeman
+                .as_ref()
+                .expect("the provider is enabled");
+            let quota = budget_for(budgets, &ProviderId::STEEMAN, || {
+                daily_guard(FEED_DEFAULT_DAILY_QUOTA)
+            });
+            let runtime = Arc::new(ProviderRuntime::new(
+                client.clone(),
+                quota,
+                config.request_timeout,
+                Arc::clone(clock),
+            ));
+            let provider = provider::steeman::SteemanProvider::new(
+                provider_config
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| STEEMAN_DEFAULT_BASE_URL.to_string()),
+                provider_config
+                    .min_refresh_interval
+                    .unwrap_or(STEEMAN_DEFAULT_MIN_REFRESH_INTERVAL),
+                Arc::clone(&runtime),
+            );
+            runtimes.insert(ProviderId::STEEMAN, Arc::clone(&runtime));
+            registered.push(Arc::new(provider));
+        }
+    }
+
     registered
 }
 
@@ -1686,7 +1756,8 @@ fn registered_feed_providers(
         feature = "blocklist_de",
         feature = "crowdsec",
         feature = "dshield",
-        feature = "spamhaus"
+        feature = "spamhaus",
+        feature = "steeman"
     )),
     allow(dead_code)
 )]
