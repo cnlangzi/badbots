@@ -24,9 +24,6 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 /// The path the list is read from.
 const LIST_PATH: &str = "/list/ci-badguys.txt";
 
-/// The path the list of the second family is read from.
-const OTHER_LIST_PATH: &str = "/Level2_IP_Block_List.txt";
-
 fn now() -> OffsetDateTime {
     datetime!(2026-11-13 12:00:00 UTC)
 }
@@ -337,8 +334,10 @@ async fn the_list_and_another_family_convict() {
         .respond_with(ResponseTemplate::new(200).set_body_string(fixture("cins/ci-badguys.txt")))
         .mount(&server)
         .await;
+
+    let other_path = format!("/{}", badbots::provider::steeman::LEVEL2_FILE);
     Mock::given(method("GET"))
-        .and(path(OTHER_LIST_PATH))
+        .and(path(other_path.as_str()))
         .respond_with(
             ResponseTemplate::new(200).set_body_string(fixture("steeman/Level2_IP_Block_List.txt")),
         )

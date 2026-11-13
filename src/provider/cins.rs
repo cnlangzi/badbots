@@ -97,7 +97,7 @@ impl FeedProvider for CinsProvider {
             family: SourceFamily::CINS,
             published_at: None,
             retrieved_at: now,
-            expires_at: Some(now + VALIDITY),
+            expires_at: Some(list.expires_at),
             attribution: ATTRIBUTION.to_string(),
             header_lines: list.header_lines,
             entries: list.entries,
@@ -111,6 +111,8 @@ pub struct ParsedList {
     pub header_lines: Vec<String>,
     /// The observations of the list.
     pub entries: Vec<Evidence>,
+    /// The instant the observations of the list stop being usable.
+    pub expires_at: OffsetDateTime,
 }
 
 /// Parses the list of the addresses that were seen attacking.
@@ -150,12 +152,13 @@ pub fn parse_list(body: &str, now: OffsetDateTime) -> Result<ParsedList, Provide
     let expires_at = now + VALIDITY;
     let entries = addresses
         .into_iter()
-        .map(|address| observation_for(address, expires_at, now))
+        .map(|address| observation_for(address, now, expires_at))
         .collect();
 
     Ok(ParsedList {
         header_lines,
         entries,
+        expires_at,
     })
 }
 
@@ -180,7 +183,7 @@ fn addresses_of(line: &str) -> impl Iterator<Item = IpAddr> {
 /// The publisher does not say when it saw the address and states no
 /// publication time for the list either, so the observation carries no
 /// observation time and no publication time.
-fn observation_for(address: IpAddr, expires_at: OffsetDateTime, now: OffsetDateTime) -> Evidence {
+fn observation_for(address: IpAddr, now: OffsetDateTime, expires_at: OffsetDateTime) -> Evidence {
     let mut upstream_values: BTreeMap<String, String> = BTreeMap::new();
     upstream_values.insert(ADDRESS_KEY.to_string(), address.to_string());
 
