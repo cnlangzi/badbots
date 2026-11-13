@@ -1,0 +1,107 @@
+name: Provider Health
+
+on:
+  schedule:
+    - cron: "37 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: provider-health
+  cancel-in-progress: false
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Check the providers
+        env:
+          BADBOTS_ABUSEIPDB_API_KEY: ${{ secrets.ABUSEIPDB_API_KEY }}
+          BADBOTS_CROWDSEC_API_KEY: ${{ secrets.CROWDSEC_API_KEY }}
+          BADBOTS_PROBE_IP_ABUSEIPDB: ${{ vars.BADBOTS_PROBE_IP_ABUSEIPDB }}
+          BADBOTS_PROBE_IP_CROWDSEC: ${{ vars.BADBOTS_PROBE_IP_CROWDSEC }}
+          BADBOTS_PROBE_IP_BLOCKLIST_DE: ${{ vars.BADBOTS_PROBE_IP_BLOCKLIST_DE }}
+        run: cargo test --all-features --test live_providers -- --ignored --nocapture
+
+      - name: Render the summary
+        id: report
+        if: always()
+        run: |
+          report=target/provider-health/report.json
+          usable=false
+          if [ -f "$report" ] && jq -e . "$report" > /dev/null 2>&1; then
+            usable=true
+          fi
+
+          {
+            echo "### Provider health"
+            echo
+            if [ "$usable" = true ]; then
+              echo "| Provider | Status | Detail |"
+              echo "| --- | --- | --- |"
+              jq -r '.providers[] | "| \(.provider) | \(.status) | \(.detail | gsub("\n"; " ") | gsub("\\|"; "/")) |"' "$report"
+            else
+              echo "No report was produced."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          failed=false
+          if [ "$usable" = true ] && [ "$(jq '[.providers[] | select(.status == "failed")] | length' "$report")" -gt 0 ]; then
+            failed=true
+          fi
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          echo "report=$usable" >> "$GITHUB_OUTPUT"
+
+      - name: Create the label
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh label create provider-health --force --color B60205 --description "A provider of the library stopped answering"
+
+      - name: Report the failure
+        if: failure() && steps.report.outputs.failed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          report=target/provider-health/report.json
+          table=$(mktemp)
+          {
+            echo "The daily health check of the providers of \`badbots\` failed."
+            echo
+            echo "| Provider | Status | Detail |"
+            echo "| --- | --- | --- |"
+            jq -r '.providers[] | "| \(.provider) | \(.status) | \(.detail | gsub("\n"; " ") | gsub("\\|"; "/")) |"' "$report"
+          } > "$table"
+
+          failing=$(jq -r '[.providers[] | select(.status == "failed") | .provider] | join(", ")' "$report")
+          number=$(gh issue list --label provider-health --state open --limit 1 --json number --jq '.[0].number // empty')
+
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --body-file "$table"
+            gh issue comment "$number" --body "The check failed again. The providers that broke: $failing."
+          else
+            gh issue create --title "Provider health check failed" --label provider-health --body-file "$table"
+          fi
+
+      - name: Close the issue
+        if: success()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          numbers=$(gh issue list --label provider-health --state open --limit 100 --json number --jq '.[].number')
+          for number in $numbers; do
+            gh issue close "$number" --comment "The daily health check of the providers of \`badbots\` is green again."
+          done
