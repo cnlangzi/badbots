@@ -22,8 +22,8 @@ fn now() -> OffsetDateTime {
     datetime!(2026-11-14 12:30:00 UTC)
 }
 
-/// The publication time of the snapshot, which is the earlier of the two lists.
-fn published_at() -> OffsetDateTime {
+/// The publication time of the per-address list.
+fn threatintel_published_at() -> OffsetDateTime {
     datetime!(2026-11-14 07:57:24.751911 UTC)
 }
 
@@ -118,7 +118,10 @@ async fn the_publication_time_is_the_earlier_of_the_two_lists() {
     let (_server, provider) = provider_for().await;
     let snapshot = provider.fetch().await.expect("the lists are read");
 
-    assert_eq!(snapshot.published_at, Some(published_at()));
+    assert_eq!(
+        snapshot.published_at,
+        Some(threatintel_published_at().min(block_published_at()))
+    );
 }
 
 #[tokio::test]

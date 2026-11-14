@@ -225,7 +225,8 @@ async fn two_addresses_glued_together_are_no_observation() {
     let (_server, provider) = provider_for(&fixture("cins/odd_lines.txt")).await;
     let snapshot = provider.fetch().await.expect("the list is read");
 
-    assert!(!addresses_of(&snapshot).contains(&"1.168.185.2451.193.56.135"));
+    assert!(!addresses_of(&snapshot).contains(&"1.168.185.245"));
+    assert!(!addresses_of(&snapshot).contains(&"1.193.56.135"));
 }
 
 #[tokio::test]
