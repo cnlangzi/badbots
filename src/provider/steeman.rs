@@ -32,6 +32,12 @@ pub const LEVEL2_FILE: &str = "Level2_IP_Block_List.txt";
 /// The time an observation of the list stays usable.
 pub const VALIDITY: time::Duration = time::Duration::hours(48);
 
+/// The time a publication time may run ahead of the retrieval.
+///
+/// The clock of the publisher may run ahead of the clock of the host, so a
+/// list may name a publication time that lies after the moment it was fetched.
+const PUBLICATION_TOLERANCE: time::Duration = time::Duration::days(1);
+
 /// The attribution the publisher asks for.
 pub const ATTRIBUTION: &str = concat!(
     "IP block lists by Jeroen Steeman (https://www.steeman.org/IPBlock). ",
@@ -237,7 +243,7 @@ fn find_update(line: &str) -> Option<usize> {
 fn parse_publication_time(text: &str, now: OffsetDateTime) -> Option<OffsetDateTime> {
     let mut tokens = text.split_whitespace();
 
-    let date = parse_date(tokens.next()?, now)?;
+    let dates = parse_dates(tokens.next()?)?;
     let (hour, minute, second) = parse_clock(tokens.next()?)?;
 
     let mut meridiem = None;
@@ -260,16 +266,23 @@ fn parse_publication_time(text: &str, now: OffsetDateTime) -> Option<OffsetDateT
     };
 
     let clock = time::Time::from_hms(hour, minute, second).ok()?;
-    Some(date.with_time(clock).assume_offset(offset))
+    let limit = now + PUBLICATION_TOLERANCE;
+
+    dates
+        .into_iter()
+        .map(|date| date.with_time(clock).assume_offset(offset))
+        .filter(|published| *published <= limit)
+        .max()
 }
 
-/// The date the publisher states.
+/// The dates the publisher states.
 ///
 /// The publisher writes the date as `D/M/YYYY`. The day and the month are read
-/// in either order, because the two orders name dates that lie months apart
+/// in either order, because the two orders name dates that lie a month apart
 /// from each other, while the list is published every day and the date it
-/// names lies close to the moment of the retrieval.
-fn parse_date(text: &str, now: OffsetDateTime) -> Option<time::Date> {
+/// names lies close to the moment of the retrieval. A date that names no month
+/// in one order is read in the other order alone.
+fn parse_dates(text: &str) -> Option<Vec<time::Date>> {
     let mut parts = text.split('/');
     let first: u8 = parts.next()?.parse().ok()?;
     let second: u8 = parts.next()?.parse().ok()?;
@@ -278,27 +291,14 @@ fn parse_date(text: &str, now: OffsetDateTime) -> Option<time::Date> {
         return None;
     }
 
-    [date_of(first, second, year), date_of(second, first, year)]
-        .into_iter()
-        .flatten()
-        .min_by_key(|date| distance_to(*date, now))
+    let dates = [date_of(first, second, year), date_of(second, first, year)];
+    Some(dates.into_iter().flatten().collect())
 }
 
 /// The calendar date a day and a month name.
 fn date_of(day: u8, month: u8, year: i32) -> Option<time::Date> {
     let month = time::Month::try_from(month).ok()?;
     time::Date::from_calendar_date(year, month, day).ok()
-}
-
-/// The distance between a date and the moment of the retrieval.
-fn distance_to(date: time::Date, now: OffsetDateTime) -> time::Duration {
-    let published = date.midnight().assume_utc();
-
-    if published > now {
-        published - now
-    } else {
-        now - published
-    }
 }
 
 /// The time of day the publisher states.
@@ -467,8 +467,8 @@ mod tests {
     #[test]
     fn the_day_and_the_month_are_read_in_either_order() {
         assert_eq!(
-            parse_publication_time("14/11/2026 03:52:24 UTC", now()),
-            Some(datetime!(2026-11-14 03:52:24 UTC))
+            parse_publication_time("12/11/2026 03:52:24 UTC", now()),
+            Some(datetime!(2026-11-12 03:52:24 UTC))
         );
         assert_eq!(
             parse_publication_time("5/13/2026 03:52:24 UTC", now()),
@@ -477,10 +477,40 @@ mod tests {
     }
 
     #[test]
-    fn a_date_that_names_both_orders_is_the_one_closest_to_the_retrieval() {
+    fn a_date_that_names_both_orders_is_the_later_of_the_two() {
         assert_eq!(
             parse_publication_time("05/11/2026 03:52:24 UTC", now()),
             Some(datetime!(2026-11-05 03:52:24 UTC))
+        );
+    }
+
+    #[test]
+    fn a_date_that_does_not_depend_on_the_clock_of_the_host() {
+        let later = datetime!(2027-05-20 12:00:00 UTC);
+
+        assert_eq!(
+            parse_publication_time("05/11/2026 03:52:24 UTC", later),
+            Some(datetime!(2026-11-05 03:52:24 UTC))
+        );
+    }
+
+    #[test]
+    fn a_date_that_lies_after_the_retrieval_is_dropped() {
+        let later = datetime!(2026-12-01 12:00:00 UTC);
+
+        assert_eq!(
+            parse_publication_time("12/11/2026 03:52:24 UTC", later),
+            Some(datetime!(2026-11-12 03:52:24 UTC))
+        );
+    }
+
+    #[test]
+    fn a_date_that_lies_after_the_retrieval_in_both_orders_is_no_publication_time() {
+        let earlier = datetime!(2026-01-01 12:00:00 UTC);
+
+        assert_eq!(
+            parse_publication_time("12/11/2026 03:52:24 UTC", earlier),
+            None
         );
     }
 
