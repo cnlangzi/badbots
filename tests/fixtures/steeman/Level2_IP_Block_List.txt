@@ -1,4 +1,4 @@
-# https://jeroen.steeman.org/Level2_IP_Block_List.txt Contains 15028 IP addresses. Last updated: 5/13/2026 7:25:57 PM UTC
+# https://jeroen.steeman.org/Level2_IP_Block_List.txt Contains 16469 IP addresses. Last updated: 14/11/2026 03:52:24 UTC
 1.9.114.224
 1.12.217.80
 45.32.1.1

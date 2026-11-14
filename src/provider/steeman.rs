@@ -147,7 +147,7 @@ pub fn parse_list(body: &str, now: OffsetDateTime) -> Result<ParsedList, Provide
         ));
     }
 
-    let published_at = published_at_of(&header_lines);
+    let published_at = published_at_of(&header_lines, now);
     let expires_at = published_at.unwrap_or(now) + VALIDITY;
 
     let entries = addresses
@@ -213,12 +213,12 @@ fn observation_for(
 /// The publication time the header of the list carries.
 ///
 /// The publisher names the publication time in the header of the list.
-fn published_at_of(header_lines: &[String]) -> Option<OffsetDateTime> {
+fn published_at_of(header_lines: &[String], now: OffsetDateTime) -> Option<OffsetDateTime> {
     header_lines.iter().rev().find_map(|line| {
         let position = find_update(line)?;
         let rest = line[position + "updated".len()..].trim();
         let rest = rest.strip_prefix(':').unwrap_or(rest).trim();
-        parse_publication_time(rest)
+        parse_publication_time(rest, now)
     })
 }
 
@@ -231,13 +231,13 @@ fn find_update(line: &str) -> Option<usize> {
 
 /// The publication time the header states.
 ///
-/// The publisher writes the time as `M/D/YYYY h:mm:ss AM/PM UTC`. The hour
-/// has one or two digits and the meridiem may be absent, in which case the
-/// hour is the hour of the day.
-fn parse_publication_time(text: &str) -> Option<OffsetDateTime> {
+/// The publisher writes the time as `D/M/YYYY H:mm:ss UTC`. The hour is on a
+/// twenty-four-hour clock, and the meridiem may be named, in which case the
+/// hour is on a twelve-hour clock.
+fn parse_publication_time(text: &str, now: OffsetDateTime) -> Option<OffsetDateTime> {
     let mut tokens = text.split_whitespace();
 
-    let date = parse_date(tokens.next()?)?;
+    let date = parse_date(tokens.next()?, now)?;
     let (hour, minute, second) = parse_clock(tokens.next()?)?;
 
     let mut meridiem = None;
@@ -265,18 +265,40 @@ fn parse_publication_time(text: &str) -> Option<OffsetDateTime> {
 
 /// The date the publisher states.
 ///
-/// The publisher writes the date as `M/D/YYYY`.
-fn parse_date(text: &str) -> Option<time::Date> {
+/// The publisher writes the date as `D/M/YYYY`. The day and the month are read
+/// in either order, because the two orders name dates that lie months apart
+/// from each other, while the list is published every day and the date it
+/// names lies close to the moment of the retrieval.
+fn parse_date(text: &str, now: OffsetDateTime) -> Option<time::Date> {
     let mut parts = text.split('/');
-    let month: u8 = parts.next()?.parse().ok()?;
-    let day: u8 = parts.next()?.parse().ok()?;
+    let first: u8 = parts.next()?.parse().ok()?;
+    let second: u8 = parts.next()?.parse().ok()?;
     let year: i32 = parts.next()?.parse().ok()?;
     if parts.next().is_some() {
         return None;
     }
 
+    [date_of(first, second, year), date_of(second, first, year)]
+        .into_iter()
+        .flatten()
+        .min_by_key(|date| distance_to(*date, now))
+}
+
+/// The calendar date a day and a month name.
+fn date_of(day: u8, month: u8, year: i32) -> Option<time::Date> {
     let month = time::Month::try_from(month).ok()?;
     time::Date::from_calendar_date(year, month, day).ok()
+}
+
+/// The distance between a date and the moment of the retrieval.
+fn distance_to(date: time::Date, now: OffsetDateTime) -> time::Duration {
+    let published = date.midnight().assume_utc();
+
+    if published > now {
+        published - now
+    } else {
+        now - published
+    }
 }
 
 /// The time of day the publisher states.
@@ -336,6 +358,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use time::OffsetDateTime;
     use time::macros::datetime;
 
     use super::{
@@ -344,6 +367,11 @@ mod tests {
     use crate::config::{STEEMAN_DEFAULT_BASE_URL, STEEMAN_DEFAULT_MIN_REFRESH_INTERVAL};
     use crate::provider::lookup::ProviderRuntime;
     use crate::quota::daily_guard;
+
+    /// The moment the list is read at.
+    fn now() -> OffsetDateTime {
+        datetime!(2026-11-14 12:00:00 UTC)
+    }
 
     fn runtime() -> Arc<ProviderRuntime> {
         Arc::new(ProviderRuntime::new(
@@ -370,12 +398,12 @@ mod tests {
 
     #[test]
     fn the_publication_time_is_read_from_the_header() {
-        let header = "https://jeroen.steeman.org/Level2_IP_Block_List.txt Contains 15028 IP \
-                      addresses. Last updated: 5/13/2026 7:25:57 PM UTC";
+        let header = "https://jeroen.steeman.org/Level2_IP_Block_List.txt Contains 16469 IP \
+                      addresses. Last updated: 14/11/2026 03:52:24 UTC";
 
         assert_eq!(
-            published_at_of(&[header.to_string()]),
-            Some(datetime!(2026-05-13 19:25:57 UTC))
+            published_at_of(&[header.to_string()], now()),
+            Some(datetime!(2026-11-14 03:52:24 UTC))
         );
     }
 
@@ -383,13 +411,13 @@ mod tests {
     fn the_publication_time_is_read_from_a_header_of_several_lines() {
         let header = vec![
             "https://jeroen.steeman.org/Level2_IP_Block_List.txt".to_string(),
-            "Contains 15028 IP addresses.".to_string(),
-            "Last updated: 5/13/2026 7:25:57 PM UTC".to_string(),
+            "Contains 16469 IP addresses.".to_string(),
+            "Last updated: 14/11/2026 03:52:24 UTC".to_string(),
         ];
 
         assert_eq!(
-            published_at_of(&header),
-            Some(datetime!(2026-05-13 19:25:57 UTC))
+            published_at_of(&header, now()),
+            Some(datetime!(2026-11-14 03:52:24 UTC))
         );
     }
 
@@ -397,42 +425,73 @@ mod tests {
     fn a_header_without_a_time_carries_no_publication_time() {
         let header = vec!["https://jeroen.steeman.org/Level2_IP_Block_List.txt".to_string()];
 
-        assert_eq!(published_at_of(&header), None);
+        assert_eq!(published_at_of(&header, now()), None);
+    }
+
+    #[test]
+    fn the_hour_may_have_one_digit() {
+        assert_eq!(
+            parse_publication_time("14/11/2026 3:52:24 UTC", now()),
+            Some(datetime!(2026-11-14 03:52:24 UTC))
+        );
     }
 
     #[test]
     fn the_hour_may_have_two_digits() {
         assert_eq!(
-            parse_publication_time("5/13/2026 07:25:57 PM UTC"),
-            Some(datetime!(2026-05-13 19:25:57 UTC))
+            parse_publication_time("14/11/2026 03:52:24 UTC", now()),
+            Some(datetime!(2026-11-14 03:52:24 UTC))
         );
     }
 
     #[test]
     fn the_meridiem_may_be_absent() {
         assert_eq!(
-            parse_publication_time("5/13/2026 19:25:57 UTC"),
-            Some(datetime!(2026-05-13 19:25:57 UTC))
+            parse_publication_time("14/11/2026 19:25:57 UTC", now()),
+            Some(datetime!(2026-11-14 19:25:57 UTC))
         );
     }
 
     #[test]
     fn the_midnight_and_noon_of_the_meridiem_are_read() {
         assert_eq!(
-            parse_publication_time("5/13/2026 12:25:57 AM UTC"),
+            parse_publication_time("5/13/2026 12:25:57 AM UTC", now()),
             Some(datetime!(2026-05-13 00:25:57 UTC))
         );
         assert_eq!(
-            parse_publication_time("5/13/2026 12:25:57 PM UTC"),
+            parse_publication_time("5/13/2026 12:25:57 PM UTC", now()),
             Some(datetime!(2026-05-13 12:25:57 UTC))
         );
     }
 
     #[test]
+    fn the_day_and_the_month_are_read_in_either_order() {
+        assert_eq!(
+            parse_publication_time("14/11/2026 03:52:24 UTC", now()),
+            Some(datetime!(2026-11-14 03:52:24 UTC))
+        );
+        assert_eq!(
+            parse_publication_time("5/13/2026 03:52:24 UTC", now()),
+            Some(datetime!(2026-05-13 03:52:24 UTC))
+        );
+    }
+
+    #[test]
+    fn a_date_that_names_both_orders_is_the_one_closest_to_the_retrieval() {
+        assert_eq!(
+            parse_publication_time("05/11/2026 03:52:24 UTC", now()),
+            Some(datetime!(2026-11-05 03:52:24 UTC))
+        );
+    }
+
+    #[test]
     fn a_time_that_cannot_be_read_is_no_publication_time() {
-        assert_eq!(parse_publication_time("the 13th of May"), None);
-        assert_eq!(parse_publication_time("5/13/2026 7:25:57 CET"), None);
-        assert_eq!(parse_publication_time("5/13/2026 25:25:57 PM UTC"), None);
+        assert_eq!(parse_publication_time("the 13th of May", now()), None);
+        assert_eq!(parse_publication_time("5/13/2026 7:25:57 CET", now()), None);
+        assert_eq!(
+            parse_publication_time("5/13/2026 25:25:57 PM UTC", now()),
+            None
+        );
     }
 
     #[test]
