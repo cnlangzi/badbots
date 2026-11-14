@@ -88,8 +88,13 @@ its coverage of that family is partial.
 | An observation expires | 48 hours after the publication time, or 48 hours after the retrieval when the header carries no time |
 | The list may be fetched again | 24 hours after the last refresh, whether it succeeded or not |
 
-The publisher writes the publication time as `M/D/YYYY h:mm:ss AM/PM UTC`. The
-hour has one or two digits and the meridiem may be absent. A header that
+The publisher writes the publication time as `D/M/YYYY H:mm:ss UTC`. The hour
+is on a twenty-four-hour clock, and a meridiem may be named, in which case the
+hour is on a twelve-hour clock. The day and the month are read in either
+order, and the two orders name dates that lie a month apart from each other.
+The list is published every day, so the date it names lies close to the moment
+of the retrieval: the later of the two dates is the one the publisher means,
+as long as it does not lie more than a day after the retrieval. A header that
 carries no readable time leaves the publication time unset, and the
 observations then run from the moment the list was fetched.
 

@@ -19,11 +19,17 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn now() -> OffsetDateTime {
-    datetime!(2025-01-01 12:00:00 UTC)
+    datetime!(2026-11-14 12:30:00 UTC)
 }
 
-fn published_at() -> OffsetDateTime {
-    datetime!(2025-01-01 03:00:00 UTC)
+/// The publication time of the per-address list.
+fn threatintel_published_at() -> OffsetDateTime {
+    datetime!(2026-11-14 07:57:24.751911 UTC)
+}
+
+/// The publication time of the subnet list.
+fn block_published_at() -> OffsetDateTime {
+    datetime!(2026-11-14 12:15:46.174238 UTC)
 }
 
 /// The observation about an address.
@@ -108,6 +114,17 @@ async fn the_request_identifies_the_operator() {
 }
 
 #[tokio::test]
+async fn the_publication_time_is_the_earlier_of_the_two_lists() {
+    let (_server, provider) = provider_for().await;
+    let snapshot = provider.fetch().await.expect("the lists are read");
+
+    assert_eq!(
+        snapshot.published_at,
+        Some(threatintel_published_at().min(block_published_at()))
+    );
+}
+
+#[tokio::test]
 async fn a_block_record_is_a_reconnaissance_observation() {
     let (_server, provider) = provider_for().await;
     let snapshot = provider.fetch().await.expect("the lists are read");
@@ -115,7 +132,7 @@ async fn a_block_record_is_a_reconnaissance_observation() {
     let entry = snapshot
         .entries
         .iter()
-        .find(|entry| entry.upstream_values.get("targets").map(String::as_str) == Some("350"))
+        .find(|entry| entry.upstream_values.get("targets").map(String::as_str) == Some("345"))
         .expect("the record is an observation");
 
     assert_eq!(entry.provider, ProviderId::DSHIELD);
@@ -123,7 +140,7 @@ async fn a_block_record_is_a_reconnaissance_observation() {
     assert_eq!(entry.assertion, Assertion::Reconnaissance);
     assert_eq!(entry.category, ThreatCategory::Scanner);
     assert_eq!(entry.strength, EvidenceStrength::Indicative);
-    assert_eq!(entry.count, Some(350));
+    assert_eq!(entry.count, Some(345));
     assert_eq!(
         entry.scope,
         MatchScope::Prefix {
@@ -132,8 +149,8 @@ async fn a_block_record_is_a_reconnaissance_observation() {
     );
 
     let window = entry.observation_window.expect("the window is reported");
-    assert_eq!(window.end, published_at());
-    assert_eq!(window.start, published_at() - time::Duration::days(3));
+    assert_eq!(window.end, block_published_at());
+    assert_eq!(window.start, block_published_at() - time::Duration::days(3));
 }
 
 #[tokio::test]
@@ -161,7 +178,7 @@ async fn the_last_seen_date_becomes_the_observation_time() {
 
     let entry = observation_of(&snapshot, "45.32.1.1").expect("the address is an observation");
 
-    assert_eq!(entry.observed_at, Some(datetime!(2025-01-01 00:00:00 UTC)));
+    assert_eq!(entry.observed_at, Some(datetime!(2026-11-14 00:00:00 UTC)));
     assert_eq!(entry.scope, MatchScope::Exact);
 }
 

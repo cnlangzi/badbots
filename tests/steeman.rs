@@ -25,11 +25,11 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 const LIST_PATH: &str = "/Level2_IP_Block_List.txt";
 
 fn now() -> OffsetDateTime {
-    datetime!(2026-05-14 12:00:00 UTC)
+    datetime!(2026-11-14 12:00:00 UTC)
 }
 
 fn published_at() -> OffsetDateTime {
-    datetime!(2026-05-13 19:25:57 UTC)
+    datetime!(2026-11-14 03:52:24 UTC)
 }
 
 fn address(text: &str) -> IpAddr {
@@ -186,8 +186,8 @@ async fn the_header_lines_are_kept_verbatim() {
     assert_eq!(
         snapshot.header_lines,
         vec![
-            "https://jeroen.steeman.org/Level2_IP_Block_List.txt Contains 15028 IP addresses. \
-             Last updated: 5/13/2026 7:25:57 PM UTC"
+            "https://jeroen.steeman.org/Level2_IP_Block_List.txt Contains 16469 IP addresses. \
+             Last updated: 14/11/2026 03:52:24 UTC"
                 .to_string()
         ]
     );

@@ -128,7 +128,9 @@ category `GenericAbuse`.
 
 The publisher writes the publication time in ISO 8601, with or without an
 offset. The header of `block.txt` names it `updated`, the header of
-`threatintel.txt` names it `last update`.
+`threatintel.txt` names it `last update`. The two lists carry a publication
+time of their own, and the snapshot carries the earlier of the two, so that no
+observation of the snapshot claims to be fresher than the list it came from.
 
 ## Terms and attribution
 

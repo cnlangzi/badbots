@@ -23,7 +23,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn now() -> OffsetDateTime {
-    datetime!(2025-01-01 12:00:00 UTC)
+    datetime!(2026-11-14 12:00:00 UTC)
 }
 
 fn address(text: &str) -> IpAddr {
@@ -421,7 +421,7 @@ async fn the_status_reports_the_entries_and_the_next_refresh() {
     assert_eq!(status.entries, Some(3));
     assert_eq!(
         status.published_at,
-        Some(datetime!(2025-01-01 00:00:00 UTC))
+        Some(datetime!(2026-11-13 15:56:44 UTC))
     );
     assert_eq!(
         status.next_refresh_at,
