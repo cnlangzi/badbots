@@ -1,2 +1,2 @@
-{"cidr":"2001:db8::/32","sblid":"SBL256896","rir":"apnic"}
-{"type":"metadata","timestamp":1735689600,"size":512,"records":1,"copyright":"Copyright (c) 2025 The Spamhaus Project","terms":"https://www.spamhaus.org/drop/faq"}
+{"cidr":"2001:678:254::/48","sblid":"SBL697648","rir":"ripencc"}
+{"type":"metadata","timestamp":1794657404,"size":5676,"records":90,"copyright":"(c) 2026 The Spamhaus Project SLU","terms":"https://www.spamhaus.org/drop/terms/"}

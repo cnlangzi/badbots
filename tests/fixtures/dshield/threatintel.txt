@@ -1,23 +1,27 @@
 # threat intel data (c) isc.sans.edu
 # for details see https://isc.sans.edu/feeds_doc.html
-# last update : 2025-01-01T03:00:00.000000+00:00
-#
+# last update : 2026-11-14T07:57:24.751911+00:00
 # Columns:
-# date	lastseen	inet_ntoa(ip)	type	country
-2024-12-01	2025-01-01	45.32.1.1	dshieldssh	US
-2024-12-20	2024-12-31	45.32.1.2	webscanner	DE
-2024-12-28	2024-12-30	45.32.1.3	forumspam	US
-2024-12-28	2024-12-30	45.32.1.4	blocklistdeapache	US
-2024-12-28	2024-12-30	45.32.1.5	blocklistde22	US
-2024-12-28	2024-12-30	45.32.1.6	blocklistde443	US
-2024-12-28	2024-12-30	45.32.1.7	openresolver	US
-2024-12-28	2024-12-30	45.32.1.8	mastodon	US
-2024-12-28	2024-12-30	45.32.1.9	tldns	US
-2024-12-28	2024-12-30	45.32.1.10	torexit	US
-2024-12-28	2024-12-30	45.32.1.11	ciarmy	US
-2024-12-28	2024-12-30	45.32.1.12	censys	US
-2024-12-28	2024-12-30	45.32.1.13	shadowserver	US
-2024-12-28	2024-12-30	45.32.1.14	anthropic	US
-2024-12-28	2024-12-30	45.32.1.15	openai	US
-2024-12-28	2025-01-01	1.10.16.5	dshieldssh	US
-2024-11-01	2024-12-02	45.32.1.99	dshieldssh	US
+# First seen: date the IP was added to the database
+# Last seen: last time the IP was seen (IPs are only included if they were seen in the last 7 days)
+# IP address
+# Label (see https://isc.sans.edu/datafeeddocs.html for details)
+# country (2 letter ISO code)
+date	lastseen	inet_ntoa(ip)	type	country
+2026-11-01	2026-11-14	45.32.1.1	dshieldssh	US
+2026-11-08	2026-11-13	45.32.1.2	webscanner	DE
+2026-11-08	2026-11-12	45.32.1.3	forumspam	US
+2026-11-08	2026-11-12	45.32.1.4	blocklistdeapache	US
+2026-11-08	2026-11-12	45.32.1.5	blocklistde22	US
+2026-11-08	2026-11-12	45.32.1.6	blocklistde443	US
+2026-11-08	2026-11-12	45.32.1.7	openresolver	US
+2026-11-08	2026-11-12	45.32.1.8	mastodon	US
+2026-11-08	2026-11-12	45.32.1.9	tldns	US
+2026-11-08	2026-11-12	45.32.1.10	torexit	US
+2026-11-08	2026-11-12	45.32.1.11	ciarmy	US
+2026-11-08	2026-11-12	45.32.1.12	censys	US
+2026-11-08	2026-11-12	45.32.1.13	shadowserver	US
+2026-11-08	2026-11-12	45.32.1.14	anthropic	US
+2026-11-08	2026-11-12	45.32.1.15	openai	US
+2026-11-08	2026-11-13	1.10.16.5	dshieldssh	US
+2026-09-01	2026-10-02	45.32.1.99	dshieldssh	US

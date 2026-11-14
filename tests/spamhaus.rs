@@ -20,11 +20,11 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn now() -> OffsetDateTime {
-    datetime!(2025-01-01 12:00:00 UTC)
+    datetime!(2026-11-14 12:00:00 UTC)
 }
 
 fn published_at() -> OffsetDateTime {
-    datetime!(2025-01-01 00:00:00 UTC)
+    datetime!(2026-11-13 15:56:44 UTC)
 }
 
 async fn provider_for(v4: &str, v6: &str) -> (MockServer, SpamhausProvider) {
@@ -104,7 +104,7 @@ async fn an_entry_is_a_network_control_observation() {
         Some(published_at() + time::Duration::hours(26))
     );
     assert_eq!(entry.upstream_values.get("sblid").unwrap(), "SBL256894");
-    assert_eq!(entry.upstream_values.get("rir").unwrap(), "apinc");
+    assert_eq!(entry.upstream_values.get("rir").unwrap(), "apnic");
 }
 
 #[tokio::test]
@@ -116,7 +116,7 @@ async fn the_attribution_carries_the_copyright_and_the_terms() {
     assert!(
         snapshot
             .attribution
-            .contains("https://www.spamhaus.org/drop/faq")
+            .contains("https://www.spamhaus.org/drop/terms/")
     );
 }
 
