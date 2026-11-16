@@ -256,7 +256,10 @@ pub struct Config {
     /// The provider configuration.
     #[serde(default)]
     pub providers: ProviderConfig,
-    /// The timeout of a single provider request.
+    /// The timeout of a single provider lookup.
+    ///
+    /// A lookup that is refused is repeated over the other address family, and
+    /// the timeout bounds both attempts together.
     #[serde(default = "default_request_timeout")]
     pub request_timeout: Duration,
     /// How long a positive lookup result is reused.
@@ -285,14 +288,17 @@ pub struct Config {
     pub user_agent: UserAgentConfig,
     /// The PEM of an additional root certificate the client trusts.
     ///
-    /// The certificate is trusted in addition to the roots of the system, so a
-    /// publisher whose certificate is signed by a private authority stays
-    /// reachable.
+    /// The certificate is trusted in addition to the roots the client trusts
+    /// by default, so a publisher whose certificate is signed by a private
+    /// authority stays reachable.
     #[serde(default)]
     pub client_ca_pem: Option<String>,
     /// The URL of the proxy the client reaches the upstream through.
     ///
-    /// The proxy of the environment is used when no proxy is named.
+    /// The proxy of the environment is used when no proxy is named. A proxy
+    /// takes the place of the upstream on the path, so the repetition of a
+    /// refused document over the other address family reaches the proxy
+    /// instead of the publisher.
     #[serde(default)]
     pub proxy: Option<String>,
 }

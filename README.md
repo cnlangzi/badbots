@@ -323,7 +323,7 @@ the configuration:
 
 | Setting | Meaning | Default |
 |---|---|---|
-| `client_ca_pem` | The PEM of an additional root certificate the client trusts, in addition to the roots of the system. | none |
+| `client_ca_pem` | The PEM of an additional root certificate the client trusts, in addition to the roots the client trusts by default. | none |
 | `proxy` | The URL of the proxy the client reaches the upstream through. | the proxy of the environment |
 
 An answer that is not the document of the publisher — the status of an
@@ -342,8 +342,12 @@ server errors — is never repeated, because repeating it spends the quota of
 the upstream without repairing anything.
 
 The budget of a provider is spent once per lookup: the repetition of a refused
-request does not spend it a second time, because the refused request never
-reached the publisher.
+request is part of the same lookup, so the guard of the provider counts it
+once.
+
+The repetition needs a direct route to the publisher. A proxy takes the place
+of the upstream on the path, so the repetition reaches the proxy over the
+other address family and the publisher sees the request twice.
 
 ## Registering a provider
 

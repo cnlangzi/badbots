@@ -117,6 +117,11 @@
 //! provider, the URL, the status, the content type and an excerpt of the body.
 //! A status the upstream decides itself — `401`, `403`, `429` and the server
 //! errors — is never repeated.
+//!
+//! The repetition needs a direct route to the publisher: a proxy takes the
+//! place of the upstream on the path, so the repetition reaches the proxy over
+//! the other address family. The timeout of the configuration bounds a lookup,
+//! so both attempts together stay within it.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -1063,7 +1068,10 @@ impl BadBotsBuilder {
         self
     }
 
-    /// Sets the timeout of a single provider request.
+    /// Sets the timeout of a single provider lookup.
+    ///
+    /// A lookup that is refused is repeated over the other address family, and
+    /// the timeout bounds both attempts together.
     pub fn request_timeout(mut self, timeout: Duration) -> Self {
         self.config.request_timeout = timeout;
         self
@@ -1258,7 +1266,10 @@ impl BadBotsBuilder {
     /// [`send_anonymous_document`](ProviderRuntime::send_anonymous_document),
     /// which ask the upstream for a document and recover a document that was
     /// refused. A provider that uses them benefits from the recovery like the
-    /// providers the crate ships do.
+    /// providers the crate ships do. A provider that builds its request with
+    /// [`client`](ProviderRuntime::client) and sends it with
+    /// [`send`](ProviderRuntime::send) keeps the behaviour of today: no
+    /// detection and no recovery.
     ///
     /// The identifier of the provider has to be unique, because the answers of
     /// a provider are cached under its identifier. A build with two providers
@@ -1271,8 +1282,8 @@ impl BadBotsBuilder {
     /// use async_trait::async_trait;
     /// use badbots::provider::{LookupProvider, ProviderCapability, ProviderCost, ProviderFinding};
     /// use badbots::{
-    ///     BadBots, Config, CoverageLevel, ProviderError, ProviderId, ProviderRuntime,
-    ///     SourceFamily, daily_guard,
+    ///     BadBots, Config, CoverageLevel, DocumentKind, ProviderError, ProviderId,
+    ///     ProviderRuntime, SourceFamily, daily_guard,
     /// };
     ///
     /// struct InternalProvider {
@@ -1299,9 +1310,11 @@ impl BadBotsBuilder {
     ///
     ///     async fn lookup(&self, ip: IpAddr) -> Result<ProviderFinding, ProviderError> {
     ///         let now = self.runtime.clock().now();
-    ///         let request = self.runtime.client().get("https://intel.internal/v1");
-    ///         let response = self.runtime.send(request, now).await?;
-    ///         let _body = self.runtime.read_body(response).await?;
+    ///         let url = format!("https://intel.internal/v1/{ip}");
+    ///         let _body = self
+    ///             .runtime
+    ///             .send_anonymous_document(&url, |client| client.get(&url), now, DocumentKind::Text)
+    ///             .await?;
     ///         Ok(ProviderFinding::empty(self.id(), CoverageLevel::Partial))
     ///     }
     /// }
@@ -1409,7 +1422,14 @@ impl BadBotsBuilder {
         }
 
         let clients = match self.clients {
-            Some(clients) => clients,
+            Some(clients) => {
+                if config.client_ca_pem.is_some() || config.proxy.is_some() {
+                    tracing::warn!(
+                        "the clients of the host replace the clients the library builds, so the root certificate and the proxy of the configuration are not applied"
+                    );
+                }
+                clients
+            }
             None => http::build_clients(
                 config.request_timeout,
                 config.client_ca_pem.as_deref(),

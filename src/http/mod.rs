@@ -79,8 +79,10 @@ impl ClientSet {
 /// The two clients that are bound to a family are the ordinary client with the
 /// local address of that family, which keeps them from reaching the other one.
 ///
-/// A root certificate is trusted in addition to the roots of the system. A
-/// proxy replaces the proxy of the environment when one is named.
+/// A root certificate is trusted in addition to the roots the client trusts by
+/// default. A proxy replaces the proxy of the environment when one is named;
+/// a proxy takes the place of the upstream on the path, so a client that is
+/// bound to a family is bound to the family of the proxy.
 pub fn build_clients(
     timeout: Duration,
     root_certificate: Option<&str>,
