@@ -91,6 +91,32 @@
 //!
 //! Without the `abuseipdb` crate feature the provider is not compiled in, and
 //! the build of the library fails with [`ConfigError::MissingFeature`].
+//!
+//! # The transport
+//!
+//! The library builds the clients it reaches the upstream with and owns them,
+//! because the host that deploys the library knows nothing about the
+//! publishers, the address families they offer or what an intermediary on the
+//! path does to an answer. A host that needs a private root certificate or a
+//! proxy names them in the configuration:
+//!
+//! | Setting | Meaning | Default |
+//! |---|---|---|
+//! | `client_ca_pem` | The PEM of an additional root certificate the client trusts. | none |
+//! | `proxy` | The URL of the proxy the client reaches the upstream through. | the proxy of the environment |
+//!
+//! An answer that is not the document of the publisher is recovered by the
+//! library: the request is repeated once over the other address family, and
+//! the family that delivered the document is remembered for the host, so the
+//! next request to that host does not pay for the refusal again. The provider
+//! that asked for the document never learns about the refusal — it receives
+//! the document.
+//!
+//! A refusal that the repetition does not repair reaches the caller as the
+//! coarse error of the provider, and the diagnosis stays in the log: the
+//! provider, the URL, the status, the content type and an excerpt of the body.
+//! A status the upstream decides itself — `401`, `403`, `429` and the server
+//! errors — is never repeated.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -132,7 +158,7 @@ pub use model::{
     Evidence, EvidenceStrength, IpVerdict, MatchScope, ObservationWindow, ProviderId, SourceFamily,
     Suppression, ThreatCategory, UaState, UserAgentMarkers, VerdictInput, VerdictReason,
 };
-pub use provider::lookup::ProviderRuntime;
+pub use provider::lookup::{DocumentKind, ProviderRuntime};
 pub use provider::{
     FeedProvider, FeedRefreshReport, FeedRefreshResult, FeedSnapshot, LookupProvider,
     ProviderCapability, ProviderCost, ProviderFinding, ProviderStatus,
@@ -150,6 +176,7 @@ use time::{Date, OffsetDateTime, Time, UtcOffset};
 use tokio::sync::Semaphore;
 
 use crate::cache::{CacheKey, CacheValue, TtlCache};
+use crate::http::ClientSet;
 use crate::model::{is_assessable, normalize};
 use crate::provider::ProviderHealth;
 use crate::worker::{Job, Verification, Worker};
@@ -882,7 +909,7 @@ impl Shared {
 #[derive(Default)]
 pub struct BadBotsBuilder {
     config: Config,
-    client: Option<reqwest::Client>,
+    clients: Option<ClientSet>,
     clock: Option<Arc<dyn Clock>>,
     markers: Option<UserAgentMarkers>,
     budgets: HashMap<ProviderId, Arc<dyn Quota>>,
@@ -1088,9 +1115,19 @@ impl BadBotsBuilder {
         self
     }
 
-    /// Uses the HTTP client the host application supplies.
-    pub fn http_client(mut self, client: reqwest::Client) -> Self {
-        self.client = Some(client);
+    /// Uses the clients the host application supplies.
+    ///
+    /// The library owns the transport, because a request that was refused is
+    /// repeated over the other address family, which only a client that is
+    /// bound to one family can do. The set holds the client that is bound to
+    /// no family and the two clients that are bound to one family each: a set
+    /// whose clients are not bound to their family loses the recovery of a
+    /// refused document.
+    ///
+    /// The library builds the set from the configuration when the host supplies
+    /// none.
+    pub fn client_set(mut self, clients: ClientSet) -> Self {
+        self.clients = Some(clients);
         self
     }
 
@@ -1207,14 +1244,21 @@ impl BadBotsBuilder {
     /// Registers a provider that is asked about one address at a time.
     ///
     /// The library builds the provider while it builds the library and hands it
-    /// the runtime the provider performs its requests in: the HTTP client the
-    /// host configured, the clock the host injected, the configured request
+    /// the runtime the provider performs its requests in: the clients the
+    /// library built, the clock the host injected, the configured request
     /// timeout and the quota of the registration. A provider that brought its
     /// own runtime would answer with another clock and would not spend the
     /// quota the status reports.
     ///
     /// The requests of a registered provider run on the worker thread of the
     /// library, like the requests of every other provider.
+    ///
+    /// The runtime of a registered provider also offers
+    /// [`send_document`](ProviderRuntime::send_document) and
+    /// [`send_anonymous_document`](ProviderRuntime::send_anonymous_document),
+    /// which ask the upstream for a document and recover a document that was
+    /// refused. A provider that uses them benefits from the recovery like the
+    /// providers the crate ships do.
     ///
     /// The identifier of the provider has to be unique, because the answers of
     /// a provider are cached under its identifier. A build with two providers
@@ -1364,13 +1408,17 @@ impl BadBotsBuilder {
             });
         }
 
-        let client = match self.client {
-            Some(client) => client,
-            None => http::build_client(config.request_timeout)?,
+        let clients = match self.clients {
+            Some(clients) => clients,
+            None => http::build_clients(
+                config.request_timeout,
+                config.client_ca_pem.as_deref(),
+                config.proxy.as_deref(),
+            )?,
         };
 
         let clock = self.clock.unwrap_or_else(clock::system_clock);
-        let registered = registered_providers(&config, &client, &clock, &mut budgets)?;
+        let registered = registered_providers(&config, &clients, &clock, &mut budgets)?;
         let mut providers: Vec<Arc<dyn LookupProvider>> = Vec::with_capacity(registered.len());
         let mut lookup_runtimes: HashMap<ProviderId, Arc<ProviderRuntime>> = HashMap::new();
         let mut ids: Vec<ProviderId> = Vec::with_capacity(registered.len());
@@ -1382,13 +1430,14 @@ impl BadBotsBuilder {
 
         for registration in self.lookup_registrations {
             let runtime = Arc::new(ProviderRuntime::new(
-                client.clone(),
+                clients.clone(),
                 registration.quota,
                 config.request_timeout,
                 Arc::clone(&clock),
             ));
             let provider = (registration.factory)(Arc::clone(&runtime));
             let id = provider.id();
+            runtime.set_provider(id.clone());
             if ids.contains(&id) {
                 return Err(ConfigError::Invalid(format!("duplicate provider id {id}")));
             }
@@ -1399,16 +1448,17 @@ impl BadBotsBuilder {
 
         let mut feed_runtimes: HashMap<ProviderId, Arc<ProviderRuntime>> = HashMap::new();
         let mut feed_providers =
-            registered_feed_providers(&config, &client, &clock, &mut feed_runtimes, &mut budgets);
+            registered_feed_providers(&config, &clients, &clock, &mut feed_runtimes, &mut budgets);
         for registration in self.feed_registrations {
             let runtime = Arc::new(ProviderRuntime::new(
-                client.clone(),
+                clients.clone(),
                 registration.quota,
                 config.request_timeout,
                 Arc::clone(&clock),
             ));
             let provider = (registration.factory)(Arc::clone(&runtime));
             let id = provider.id();
+            runtime.set_provider(id.clone());
             feed_providers.retain(|registered| registered.id() != id);
             feed_runtimes.remove(&id);
             feed_runtimes.insert(id, runtime);
@@ -1462,7 +1512,7 @@ struct RegisteredProvider {
 )]
 fn registered_providers(
     config: &Config,
-    client: &reqwest::Client,
+    clients: &ClientSet,
     clock: &Arc<dyn Clock>,
     budgets: &mut HashMap<ProviderId, Arc<dyn Quota>>,
 ) -> Result<Vec<RegisteredProvider>, ConfigError> {
@@ -1500,7 +1550,7 @@ fn registered_providers(
                 )
             });
             let runtime = Arc::new(ProviderRuntime::new(
-                client.clone(),
+                clients.clone(),
                 quota,
                 config.request_timeout,
                 Arc::clone(clock),
@@ -1516,6 +1566,7 @@ fn registered_providers(
                     .unwrap_or(ABUSEIPDB_DEFAULT_MAX_AGE_DAYS),
                 Arc::clone(&runtime),
             );
+            runtime.set_provider(provider.id());
             registered.push(RegisteredProvider {
                 provider: Arc::new(provider),
                 runtime,
@@ -1551,7 +1602,7 @@ fn registered_providers(
                 )
             });
             let runtime = Arc::new(ProviderRuntime::new(
-                client.clone(),
+                clients.clone(),
                 quota,
                 config.request_timeout,
                 Arc::clone(clock),
@@ -1565,6 +1616,7 @@ fn registered_providers(
                 provider_config.behavior_intents.clone().unwrap_or_default(),
                 Arc::clone(&runtime),
             );
+            runtime.set_provider(provider.id());
             registered.push(RegisteredProvider {
                 provider: Arc::new(provider),
                 runtime,
@@ -1590,7 +1642,7 @@ fn registered_providers(
                     )
                 });
                 let runtime = Arc::new(ProviderRuntime::new(
-                    client.clone(),
+                    clients.clone(),
                     quota,
                     config.request_timeout,
                     Arc::clone(clock),
@@ -1605,6 +1657,7 @@ fn registered_providers(
                         .unwrap_or(BLOCKLIST_DE_DEFAULT_WINDOW),
                     Arc::clone(&runtime),
                 );
+                runtime.set_provider(provider.id());
                 registered.push(RegisteredProvider {
                     provider: Arc::new(provider),
                     runtime,
@@ -1629,7 +1682,7 @@ fn registered_providers(
 )]
 fn registered_feed_providers(
     config: &Config,
-    client: &reqwest::Client,
+    clients: &ClientSet,
     clock: &Arc<dyn Clock>,
     runtimes: &mut HashMap<ProviderId, Arc<ProviderRuntime>>,
     budgets: &mut HashMap<ProviderId, Arc<dyn Quota>>,
@@ -1648,7 +1701,7 @@ fn registered_feed_providers(
                 daily_guard(FEED_DEFAULT_DAILY_QUOTA)
             });
             let runtime = Arc::new(ProviderRuntime::new(
-                client.clone(),
+                clients.clone(),
                 quota,
                 config.request_timeout,
                 Arc::clone(clock),
@@ -1663,6 +1716,7 @@ fn registered_feed_providers(
                     .unwrap_or(SPAMHAUS_DEFAULT_MIN_REFRESH_INTERVAL),
                 Arc::clone(&runtime),
             );
+            runtime.set_provider(provider.id());
             runtimes.insert(ProviderId::SPAMHAUS, Arc::clone(&runtime));
             registered.push(Arc::new(provider));
         }
@@ -1682,7 +1736,7 @@ fn registered_feed_providers(
                     daily_guard(FEED_DEFAULT_DAILY_QUOTA)
                 });
                 let runtime = Arc::new(ProviderRuntime::new(
-                    client.clone(),
+                    clients.clone(),
                     quota,
                     config.request_timeout,
                     Arc::clone(clock),
@@ -1697,6 +1751,7 @@ fn registered_feed_providers(
                         .unwrap_or(BLOCKLIST_DE_DEFAULT_MIN_REFRESH_INTERVAL),
                     Arc::clone(&runtime),
                 );
+                runtime.set_provider(provider.id());
                 runtimes.insert(ProviderId::BLOCKLIST_DE_LISTS, Arc::clone(&runtime));
                 registered.push(Arc::new(provider));
             }
@@ -1715,7 +1770,7 @@ fn registered_feed_providers(
                 daily_guard(FEED_DEFAULT_DAILY_QUOTA)
             });
             let runtime = Arc::new(ProviderRuntime::new(
-                client.clone(),
+                clients.clone(),
                 quota,
                 config.request_timeout,
                 Arc::clone(clock),
@@ -1734,6 +1789,7 @@ fn registered_feed_providers(
                     .unwrap_or(DSHIELD_DEFAULT_MIN_REFRESH_INTERVAL),
                 Arc::clone(&runtime),
             );
+            runtime.set_provider(provider.id());
             runtimes.insert(ProviderId::DSHIELD, Arc::clone(&runtime));
             registered.push(Arc::new(provider));
         }
@@ -1751,7 +1807,7 @@ fn registered_feed_providers(
                 daily_guard(FEED_DEFAULT_DAILY_QUOTA)
             });
             let runtime = Arc::new(ProviderRuntime::new(
-                client.clone(),
+                clients.clone(),
                 quota,
                 config.request_timeout,
                 Arc::clone(clock),
@@ -1766,6 +1822,7 @@ fn registered_feed_providers(
                     .unwrap_or(STEEMAN_DEFAULT_MIN_REFRESH_INTERVAL),
                 Arc::clone(&runtime),
             );
+            runtime.set_provider(provider.id());
             runtimes.insert(ProviderId::STEEMAN, Arc::clone(&runtime));
             registered.push(Arc::new(provider));
         }
@@ -1783,7 +1840,7 @@ fn registered_feed_providers(
                 daily_guard(FEED_DEFAULT_DAILY_QUOTA)
             });
             let runtime = Arc::new(ProviderRuntime::new(
-                client.clone(),
+                clients.clone(),
                 quota,
                 config.request_timeout,
                 Arc::clone(clock),
@@ -1798,6 +1855,7 @@ fn registered_feed_providers(
                     .unwrap_or(CINS_DEFAULT_MIN_REFRESH_INTERVAL),
                 Arc::clone(&runtime),
             );
+            runtime.set_provider(provider.id());
             runtimes.insert(ProviderId::CINS, Arc::clone(&runtime));
             registered.push(Arc::new(provider));
         }

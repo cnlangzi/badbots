@@ -22,7 +22,7 @@ use crate::error::ProviderError;
 use crate::model::{
     Assertion, Evidence, EvidenceStrength, MatchScope, ProviderId, SourceFamily, ThreatCategory,
 };
-use crate::provider::lookup::ProviderRuntime;
+use crate::provider::lookup::{DocumentKind, ProviderRuntime};
 use crate::provider::{FeedProvider, FeedSnapshot, ProviderCapability};
 
 /// The file name of the IPv4 list.
@@ -41,6 +41,9 @@ pub struct SpamhausProvider {
 }
 
 impl SpamhausProvider {
+    /// The kind of document the provider asks for.
+    pub const DOCUMENT_KIND: DocumentKind = DocumentKind::Json;
+
     /// Creates a provider.
     pub fn new(
         base_url: impl Into<String>,
@@ -85,13 +88,16 @@ impl FeedProvider for SpamhausProvider {
         let mut attribution: Option<String> = None;
 
         for file in [DROP_V4_FILE, DROP_V6_FILE] {
-            let request = self
+            let url = self.url(file);
+            let body = self
                 .runtime
-                .client()
-                .get(self.url(file))
-                .header("Accept", "application/json");
-            let response = self.runtime.send_anonymous(request, now).await?;
-            let body = self.runtime.read_body(response).await?;
+                .send_anonymous_document(
+                    &url,
+                    |client| client.get(&url).header("Accept", "application/json"),
+                    now,
+                    SpamhausProvider::DOCUMENT_KIND,
+                )
+                .await?;
             let list = parse_drop_list(&body, now)?;
 
             published_at = match (published_at, list.published_at) {

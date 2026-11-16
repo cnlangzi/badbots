@@ -80,7 +80,7 @@ async fn provider_for_at(body: &str, now: OffsetDateTime) -> (MockServer, Steema
     let server = server_for(body).await;
 
     let runtime = Arc::new(ProviderRuntime::new(
-        common::client(),
+        common::clients(),
         daily_guard(1_000),
         Duration::from_secs(5),
         Arc::new(TestClock::new(now)),

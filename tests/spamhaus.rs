@@ -42,9 +42,9 @@ async fn provider_for(v4: &str, v6: &str) -> (MockServer, SpamhausProvider) {
         .mount(&server)
         .await;
 
-    let client = common::client();
+    let clients = common::clients();
     let runtime = Arc::new(ProviderRuntime::new(
-        client,
+        clients,
         daily_guard(1_000),
         Duration::from_secs(5),
         Arc::new(TestClock::new(now())),
@@ -158,9 +158,9 @@ async fn a_forbidden_answer_is_reported_with_its_status_code() {
         .mount(&server)
         .await;
 
-    let client = common::client();
+    let clients = common::clients();
     let runtime = Arc::new(ProviderRuntime::new(
-        client,
+        clients,
         daily_guard(1_000),
         Duration::from_secs(5),
         Arc::new(TestClock::new(now())),

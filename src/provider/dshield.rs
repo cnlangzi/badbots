@@ -25,7 +25,7 @@ use crate::model::{
     Assertion, Evidence, EvidenceStrength, MatchScope, ObservationWindow, ProviderId, SourceFamily,
     ThreatCategory,
 };
-use crate::provider::lookup::ProviderRuntime;
+use crate::provider::lookup::{DocumentKind, ProviderRuntime};
 use crate::provider::services::{SERVICES, assertion_of, category_of};
 use crate::provider::{FeedProvider, FeedSnapshot, ProviderCapability};
 
@@ -56,6 +56,9 @@ pub struct DShieldProvider {
 }
 
 impl DShieldProvider {
+    /// The kind of document the provider asks for.
+    pub const DOCUMENT_KIND: DocumentKind = DocumentKind::Text;
+
     /// Creates a provider.
     pub fn new(
         base_url: impl Into<String>,
@@ -131,13 +134,16 @@ impl DShieldProvider {
         file: &str,
         now: OffsetDateTime,
     ) -> Result<ParsedList, ProviderError> {
-        let request = self
+        let url = self.url(file);
+        let body = self
             .runtime
-            .client()
-            .get(self.url(file))
-            .header("User-Agent", &self.user_agent);
-        let response = self.runtime.send_anonymous(request, now).await?;
-        let body = self.runtime.read_body(response).await?;
+            .send_anonymous_document(
+                &url,
+                |client| client.get(&url).header("User-Agent", &self.user_agent),
+                now,
+                DShieldProvider::DOCUMENT_KIND,
+            )
+            .await?;
 
         match file {
             BLOCK_FILE => parse_block_list(&body, now),

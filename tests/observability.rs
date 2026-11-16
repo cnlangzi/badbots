@@ -1,5 +1,7 @@
 //! The events the library reports.
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::net::IpAddr;
@@ -11,10 +13,13 @@ use badbots::provider::{
     FeedProvider, FeedSnapshot, LookupProvider, ProviderCapability, ProviderCost, ProviderFinding,
 };
 use badbots::{
-    Assertion, BadBots, Config, CoverageLevel, Evidence, EvidenceStrength, MatchScope,
-    ProviderError, ProviderId, SourceFamily, ThreatCategory, daily_guard,
+    Assertion, BadBots, Config, CoverageLevel, DocumentKind, Evidence, EvidenceStrength,
+    MatchScope, ProviderError, ProviderId, ProviderRuntime, SourceFamily, ThreatCategory,
+    daily_guard,
 };
 use time::{OffsetDateTime, macros::datetime};
+use wiremock::matchers::method;
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn now() -> OffsetDateTime {
     datetime!(2025-01-01 12:00:00 UTC)
@@ -147,6 +152,42 @@ fn bots_with_list(list: ScriptedList) -> BadBots {
         .feed_provider(daily_guard(100), move |_runtime| Arc::new(list))
         .build()
         .expect("the library is built")
+}
+
+/// A provider that asks for a document the server refuses.
+struct RefusingProvider {
+    runtime: Arc<ProviderRuntime>,
+    url: String,
+}
+
+#[async_trait]
+impl LookupProvider for RefusingProvider {
+    fn id(&self) -> ProviderId {
+        ProviderId::new("refusing")
+    }
+
+    fn family(&self) -> SourceFamily {
+        SourceFamily::new("scripted")
+    }
+
+    fn capability(&self) -> ProviderCapability {
+        ProviderCapability::Primary
+    }
+
+    fn cost(&self) -> ProviderCost {
+        ProviderCost::Medium
+    }
+
+    async fn lookup(&self, _ip: IpAddr) -> Result<ProviderFinding, ProviderError> {
+        let now = self.runtime.clock().now();
+        let url = self.url.clone();
+
+        self.runtime
+            .send_anonymous_document(&url, |client| client.get(&url), now, DocumentKind::Text)
+            .await?;
+
+        Ok(ProviderFinding::empty(self.id(), CoverageLevel::Partial))
+    }
 }
 
 #[tokio::test]
@@ -291,6 +332,45 @@ async fn a_list_that_is_refreshed_too_early_is_reported() {
         seconds(remaining) > 0.0,
         "the time that is left is reported: {remaining}"
     );
+}
+
+#[tokio::test]
+async fn a_refused_document_is_reported() {
+    let _guard = lock().await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(203)
+                .insert_header("content-type", "text/xml")
+                .set_body_bytes(b"no"),
+        )
+        .mount(&server)
+        .await;
+
+    let url = format!("{}/list", server.uri());
+    let bots = BadBots::builder()
+        .config(Config::default())
+        .client_set(common::clients())
+        .lookup_provider(daily_guard(100), move |runtime| RefusingProvider {
+            runtime,
+            url: url.clone(),
+        })
+        .build()
+        .expect("the library is built");
+
+    bots.verify_ip(address("45.32.1.5")).await;
+
+    let event = event(
+        "the upstream did not deliver the document",
+        "url",
+        &format!("{}/list", server.uri()),
+    )
+    .expect("the refusal is reported");
+    assert_eq!(event.level, tracing::Level::WARN);
+    assert_eq!(event.field("provider"), Some("refusing"));
+    assert_eq!(event.field("status"), Some("203"));
+    assert_eq!(event.field("content_type"), Some("text/xml"));
+    assert_eq!(event.field("body"), Some("no"));
 }
 
 /// An event the library reported.

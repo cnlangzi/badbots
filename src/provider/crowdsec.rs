@@ -26,7 +26,7 @@ use crate::model::{
     Assertion, BehaviorIntent, CoverageLevel, Evidence, MatchScope, ObservationWindow, ProviderId,
     SourceFamily, Suppression, ThreatCategory,
 };
-use crate::provider::lookup::{ProviderRuntime, parse_body};
+use crate::provider::lookup::{DocumentKind, ProviderRuntime, parse_body};
 use crate::provider::{LookupProvider, ProviderCapability, ProviderCost, ProviderFinding};
 use crate::secret::ApiKey;
 
@@ -112,6 +112,9 @@ pub struct CrowdSecProvider {
 }
 
 impl CrowdSecProvider {
+    /// The kind of document the provider asks for.
+    pub const DOCUMENT_KIND: DocumentKind = DocumentKind::Json;
+
     /// Creates a provider.
     pub fn new(
         api_key: ApiKey,
@@ -149,15 +152,20 @@ impl LookupProvider for CrowdSecProvider {
     async fn lookup(&self, ip: IpAddr) -> Result<ProviderFinding, ProviderError> {
         let now = self.runtime.clock().now();
         let url = format!("{}/smoke/{ip}", self.base_url.trim_end_matches('/'));
-        let request = self
+        let body = self
             .runtime
-            .client()
-            .get(url)
-            .header("x-api-key", self.api_key.expose())
-            .header("Accept", "application/json");
-
-        let response = self.runtime.send(request, now).await?;
-        let body = self.runtime.read_body(response).await?;
+            .send_document(
+                &url,
+                |client| {
+                    client
+                        .get(&url)
+                        .header("x-api-key", self.api_key.expose())
+                        .header("Accept", "application/json")
+                },
+                now,
+                CrowdSecProvider::DOCUMENT_KIND,
+            )
+            .await?;
         let parsed: SmokeResponse = parse_body(&body)?;
 
         let reputation = parsed.reputation.unwrap_or_else(|| "unknown".to_string());
@@ -418,7 +426,8 @@ mod tests {
     #[test]
     fn the_provider_states_its_cost() {
         let runtime = Arc::new(ProviderRuntime::new(
-            crate::http::build_client(Duration::from_secs(5)).expect("the client is built"),
+            crate::http::build_clients(Duration::from_secs(5), None, None)
+                .expect("the clients are built"),
             monthly_guard(10),
             Duration::from_secs(5),
             crate::clock::system_clock(),

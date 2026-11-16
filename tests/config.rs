@@ -37,6 +37,28 @@ fn a_configuration_without_the_evidence_policy_is_strict() {
 }
 
 #[test]
+fn the_transport_settings_are_read_from_the_configuration() {
+    let decoded: Config = serde_json::from_str(
+        "{\"client_ca_pem\":\"-----BEGIN CERTIFICATE-----\",\"proxy\":\"http://proxy.internal:3128\"}",
+    )
+    .expect("the configuration is decoded");
+
+    assert_eq!(
+        decoded.client_ca_pem.as_deref(),
+        Some("-----BEGIN CERTIFICATE-----")
+    );
+    assert_eq!(decoded.proxy.as_deref(), Some("http://proxy.internal:3128"));
+}
+
+#[test]
+fn the_default_configuration_names_no_certificate_and_no_proxy() {
+    let config = Config::default();
+
+    assert!(config.client_ca_pem.is_none());
+    assert!(config.proxy.is_none());
+}
+
+#[test]
 fn the_evidence_policy_is_serialized_in_snake_case() {
     let decoded: EvidencePolicy = serde_json::from_str("\"lenient\"").unwrap();
     assert_eq!(decoded, EvidencePolicy::Lenient);

@@ -36,9 +36,10 @@ async fn provider_for(name: &str) -> (MockServer, CrowdSecProvider) {
         .mount(&server)
         .await;
 
-    let client = badbots::http::build_client(Duration::from_secs(5)).expect("the client is built");
+    let clients = badbots::http::build_clients(Duration::from_secs(5), None, None)
+        .expect("the clients are built");
     let runtime = Arc::new(ProviderRuntime::new(
-        client,
+        clients,
         monthly_guard(120),
         Duration::from_secs(5),
         badbots::clock::system_clock(),

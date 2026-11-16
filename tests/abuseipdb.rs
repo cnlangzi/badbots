@@ -37,9 +37,10 @@ async fn provider_for(name: &str) -> (MockServer, AbuseIpdbProvider) {
         .mount(&server)
         .await;
 
-    let client = badbots::http::build_client(Duration::from_secs(5)).expect("the client is built");
+    let clients = badbots::http::build_clients(Duration::from_secs(5), None, None)
+        .expect("the clients are built");
     let runtime = Arc::new(ProviderRuntime::new(
-        client,
+        clients,
         daily_guard(1_000),
         Duration::from_secs(5),
         badbots::clock::system_clock(),
@@ -273,9 +274,10 @@ async fn an_unauthorized_answer_is_reported() {
         .mount(&server)
         .await;
 
-    let client = badbots::http::build_client(Duration::from_secs(5)).expect("the client is built");
+    let clients = badbots::http::build_clients(Duration::from_secs(5), None, None)
+        .expect("the clients are built");
     let runtime = Arc::new(ProviderRuntime::new(
-        client,
+        clients,
         daily_guard(1_000),
         Duration::from_secs(5),
         badbots::clock::system_clock(),

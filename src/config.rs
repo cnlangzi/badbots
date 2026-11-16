@@ -283,6 +283,18 @@ pub struct Config {
     /// The user-agent marker lists.
     #[serde(default)]
     pub user_agent: UserAgentConfig,
+    /// The PEM of an additional root certificate the client trusts.
+    ///
+    /// The certificate is trusted in addition to the roots of the system, so a
+    /// publisher whose certificate is signed by a private authority stays
+    /// reachable.
+    #[serde(default)]
+    pub client_ca_pem: Option<String>,
+    /// The URL of the proxy the client reaches the upstream through.
+    ///
+    /// The proxy of the environment is used when no proxy is named.
+    #[serde(default)]
+    pub proxy: Option<String>,
 }
 
 fn default_request_timeout() -> Duration {
@@ -326,6 +338,8 @@ impl Default for Config {
             max_concurrent_verifications: default_max_concurrent_verifications(),
             cache_capacity: default_cache_capacity(),
             user_agent: UserAgentConfig::default(),
+            client_ca_pem: None,
+            proxy: None,
         }
     }
 }

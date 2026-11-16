@@ -18,6 +18,14 @@ pub fn client() -> reqwest::Client {
         .expect("the client is built")
 }
 
+/// Builds the set of clients the tests use.
+///
+/// The three clients reach the same server, because the tests run against a
+/// server on the loopback interface.
+pub fn clients() -> badbots::http::ClientSet {
+    badbots::http::ClientSet::new(client(), client(), client())
+}
+
 /// Reads a fixture file.
 pub fn fixture(path: &str) -> String {
     let path = fixture_path(path);

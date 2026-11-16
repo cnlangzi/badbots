@@ -24,7 +24,7 @@ use crate::model::{
     Assertion, CoverageLevel, Evidence, EvidenceStrength, MatchScope, ObservationWindow,
     ProviderId, SourceFamily, ThreatCategory,
 };
-use crate::provider::lookup::{ProviderRuntime, parse_body};
+use crate::provider::lookup::{DocumentKind, ProviderRuntime, parse_body};
 use crate::provider::services::{SERVICES, assertion_of, category_of};
 use crate::provider::{
     FeedProvider, FeedSnapshot, LookupProvider, ProviderCapability, ProviderCost, ProviderFinding,
@@ -63,6 +63,9 @@ pub struct BlocklistDeQueryProvider {
 }
 
 impl BlocklistDeQueryProvider {
+    /// The kind of document the provider asks for.
+    pub const DOCUMENT_KIND: DocumentKind = DocumentKind::Json;
+
     /// Creates a provider.
     pub fn new(
         base_url: impl Into<String>,
@@ -102,20 +105,25 @@ impl LookupProvider for BlocklistDeQueryProvider {
             .unwrap_or(OffsetDateTime::UNIX_EPOCH);
         let url = format!("{}/api.php", self.base_url.trim_end_matches('/'));
 
-        let request = self
+        let body = self
             .runtime
-            .client()
-            .get(url)
-            .header("Accept", "application/json")
-            .query(&[
-                ("ip", ip.to_string()),
-                ("start", start.unix_timestamp().to_string()),
-                ("end", now.unix_timestamp().to_string()),
-                ("format", "json".to_string()),
-            ]);
-
-        let response = self.runtime.send_anonymous(request, now).await?;
-        let body = self.runtime.read_body(response).await?;
+            .send_anonymous_document(
+                &url,
+                |client| {
+                    client
+                        .get(&url)
+                        .header("Accept", "application/json")
+                        .query(&[
+                            ("ip", ip.to_string()),
+                            ("start", start.unix_timestamp().to_string()),
+                            ("end", now.unix_timestamp().to_string()),
+                            ("format", "json".to_string()),
+                        ])
+                },
+                now,
+                BlocklistDeQueryProvider::DOCUMENT_KIND,
+            )
+            .await?;
         let parsed: QueryResponse = parse_body(&body)?;
 
         let attacks = parsed.attacks.unwrap_or_default();
@@ -211,6 +219,9 @@ pub struct BlocklistDeListProvider {
 }
 
 impl BlocklistDeListProvider {
+    /// The kind of document the provider asks for.
+    pub const DOCUMENT_KIND: DocumentKind = DocumentKind::Text;
+
     /// Creates a provider for the published services.
     pub fn new(
         base_url: impl Into<String>,
@@ -274,13 +285,16 @@ impl FeedProvider for BlocklistDeListProvider {
         let mut every_service: Vec<IpAddr> = Vec::new();
 
         for service in &self.services {
-            let request = self
+            let url = self.url(service);
+            let body = self
                 .runtime
-                .client()
-                .get(self.url(service))
-                .header("Accept-Encoding", "gzip");
-            let response = self.runtime.send_anonymous(request, now).await?;
-            let body = self.runtime.read_body(response).await?;
+                .send_anonymous_document(
+                    &url,
+                    |client| client.get(&url).header("Accept-Encoding", "gzip"),
+                    now,
+                    BlocklistDeListProvider::DOCUMENT_KIND,
+                )
+                .await?;
             let addresses = parse_service_list(&body)?;
 
             if service == EVERY_SERVICE {
@@ -376,7 +390,8 @@ mod tests {
     #[test]
     fn the_query_provider_states_its_cost() {
         let runtime = Arc::new(ProviderRuntime::new(
-            crate::http::build_client(Duration::from_secs(5)).expect("the client is built"),
+            crate::http::build_clients(Duration::from_secs(5), None, None)
+                .expect("the clients are built"),
             daily_guard(10),
             Duration::from_secs(5),
             crate::clock::system_clock(),
