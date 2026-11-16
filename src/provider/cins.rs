@@ -24,7 +24,7 @@ use crate::index::ip_index::ADDRESS_KEY;
 use crate::model::{
     Assertion, Evidence, EvidenceStrength, MatchScope, ProviderId, SourceFamily, ThreatCategory,
 };
-use crate::provider::lookup::ProviderRuntime;
+use crate::provider::lookup::{DocumentKind, ProviderRuntime};
 use crate::provider::{FeedProvider, FeedSnapshot, ProviderCapability};
 
 /// The path of the list of the addresses that were seen attacking.
@@ -48,6 +48,9 @@ pub struct CinsProvider {
 }
 
 impl CinsProvider {
+    /// The kind of document the provider asks for.
+    pub const DOCUMENT_KIND: DocumentKind = DocumentKind::Text;
+
     /// Creates a provider.
     pub fn new(
         base_url: impl Into<String>,
@@ -87,9 +90,16 @@ impl FeedProvider for CinsProvider {
 
     async fn fetch(&self) -> Result<FeedSnapshot, ProviderError> {
         let now = self.runtime.clock().now();
-        let request = self.runtime.client().get(self.url());
-        let response = self.runtime.send_anonymous(request, now).await?;
-        let body = self.runtime.read_body(response).await?;
+        let url = self.url();
+        let body = self
+            .runtime
+            .send_anonymous_document(
+                &url,
+                |client| client.get(&url),
+                now,
+                CinsProvider::DOCUMENT_KIND,
+            )
+            .await?;
         let list = parse_list(&body, now)?;
 
         Ok(FeedSnapshot {
@@ -223,7 +233,8 @@ mod tests {
 
     fn runtime() -> Arc<ProviderRuntime> {
         Arc::new(ProviderRuntime::new(
-            crate::http::build_client(Duration::from_secs(5)).expect("the client is built"),
+            crate::http::build_clients(Duration::from_secs(5), None, None)
+                .expect("the clients are built"),
             daily_guard(10),
             Duration::from_secs(5),
             crate::clock::system_clock(),

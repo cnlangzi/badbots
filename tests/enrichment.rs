@@ -103,11 +103,11 @@ async fn the_assessment_does_not_wait_for_the_upstream() {
 }
 
 #[tokio::test]
-async fn the_injected_client_performs_the_request_of_the_verification() {
+async fn the_injected_clients_perform_the_request_of_the_verification() {
     let server = serve("web_app_attack.json").await;
     let bots = BadBots::builder()
         .config(config(&format!("{}/api/v2", server.uri())))
-        .http_client(common::client())
+        .client_set(common::clients())
         .build()
         .expect("the library is built");
 

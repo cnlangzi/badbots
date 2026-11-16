@@ -26,7 +26,7 @@ use crate::model::{
     Assertion, CoverageLevel, Evidence, MatchScope, ProviderId, SourceFamily, Suppression,
     ThreatCategory,
 };
-use crate::provider::lookup::{ProviderRuntime, parse_body};
+use crate::provider::lookup::{DocumentKind, ProviderRuntime, parse_body};
 use crate::provider::{LookupProvider, ProviderCapability, ProviderCost, ProviderFinding};
 use crate::secret::ApiKey;
 
@@ -82,6 +82,9 @@ pub struct AbuseIpdbProvider {
 }
 
 impl AbuseIpdbProvider {
+    /// The kind of document the provider asks for.
+    pub const DOCUMENT_KIND: DocumentKind = DocumentKind::Json;
+
     /// Creates a provider.
     pub fn new(
         api_key: ApiKey,
@@ -119,20 +122,25 @@ impl LookupProvider for AbuseIpdbProvider {
     async fn lookup(&self, ip: IpAddr) -> Result<ProviderFinding, ProviderError> {
         let now = self.runtime.clock().now();
         let url = format!("{}/check", self.base_url.trim_end_matches('/'));
-        let request = self
+        let body = self
             .runtime
-            .client()
-            .get(url)
-            .header("Key", self.api_key.expose())
-            .header("Accept", "application/json")
-            .query(&[
-                ("ipAddress", ip.to_string()),
-                ("maxAgeInDays", self.max_age_days.to_string()),
-                ("verbose", "true".to_string()),
-            ]);
-
-        let response = self.runtime.send(request, now).await?;
-        let body = self.runtime.read_body(response).await?;
+            .send_document(
+                &url,
+                |client| {
+                    client
+                        .get(&url)
+                        .header("Key", self.api_key.expose())
+                        .header("Accept", "application/json")
+                        .query(&[
+                            ("ipAddress", ip.to_string()),
+                            ("maxAgeInDays", self.max_age_days.to_string()),
+                            ("verbose", "true".to_string()),
+                        ])
+                },
+                now,
+                AbuseIpdbProvider::DOCUMENT_KIND,
+            )
+            .await?;
         let parsed: CheckResponse = parse_body(&body)?;
         let data = parsed.data;
 
@@ -331,7 +339,8 @@ mod tests {
     #[test]
     fn the_provider_states_its_cost() {
         let runtime = Arc::new(ProviderRuntime::new(
-            crate::http::build_client(Duration::from_secs(5)).expect("the client is built"),
+            crate::http::build_clients(Duration::from_secs(5), None, None)
+                .expect("the clients are built"),
             daily_guard(10),
             Duration::from_secs(5),
             crate::clock::system_clock(),

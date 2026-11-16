@@ -27,9 +27,9 @@ fn now() -> OffsetDateTime {
 }
 
 fn runtime() -> Arc<ProviderRuntime> {
-    let client = common::client();
+    let clients = common::clients();
     Arc::new(ProviderRuntime::new(
-        client,
+        clients,
         daily_guard(1_000),
         Duration::from_secs(5),
         Arc::new(TestClock::new(now())),
@@ -334,12 +334,12 @@ async fn the_list_of_every_service_does_not_repeat_the_service_lists() {
 
 #[tokio::test]
 async fn the_provider_declares_its_refresh_interval_and_its_services() {
-    let client = common::client();
+    let clients = common::clients();
     let provider = BlocklistDeListProvider::new(
         "http://127.0.0.1:1",
         Duration::from_secs(30 * 60),
         Arc::new(ProviderRuntime::new(
-            client,
+            clients,
             daily_guard(1_000),
             Duration::from_secs(5),
             Arc::new(TestClock::new(now())),

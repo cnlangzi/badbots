@@ -313,6 +313,42 @@ reproduced. The loaded list keeps them verbatim:
 let attribution = bots.feed_attribution(badbots::ProviderId::SPAMHAUS);
 ```
 
+## The transport and a refused document
+
+The library builds the clients it reaches the upstream with and owns them,
+because the host that deploys the library knows nothing about the publishers,
+the address families they offer or what an intermediary on the path does to an
+answer. A host that needs a private root certificate or a proxy names them in
+the configuration:
+
+| Setting | Meaning | Default |
+|---|---|---|
+| `client_ca_pem` | The PEM of an additional root certificate the client trusts, in addition to the roots the client trusts by default. | none |
+| `proxy` | The URL of the proxy the client reaches the upstream through. | the proxy of the environment |
+
+An answer that is not the document of the publisher — the status of an
+intermediary instead of the 200 of the publisher, or a body of another type —
+is recovered by the library itself: the request is repeated once over the
+other address family, and the family that delivered the document is remembered
+for the host, so the next request to that host does not pay for the refusal
+again. The provider that asked for the document never learns about the
+refusal, because it receives the document.
+
+A refusal that the repetition does not repair reaches the caller as the coarse
+error of the provider — a status or a parse error — and the diagnosis stays in
+the log: the provider, the URL, the status, the content type and an excerpt of
+the body. A status the upstream decides itself — `401`, `403`, `429` and the
+server errors — is never repeated, because repeating it spends the quota of
+the upstream without repairing anything.
+
+The budget of a provider is spent once per lookup: the repetition of a refused
+request is part of the same lookup, so the guard of the provider counts it
+once.
+
+The repetition needs a direct route to the publisher. A proxy takes the place
+of the upstream on the path, so the repetition reaches the proxy over the
+other address family and the publisher sees the request twice.
+
 ## Registering a provider
 
 A host with a source of threat intelligence of its own registers it with the
@@ -332,11 +368,11 @@ let bots = BadBots::builder()
 ```
 
 The library builds the provider while it builds the library and hands it the
-runtime the provider performs its requests in: the HTTP client the host
-configured, the clock the host injected, the configured request timeout and the
-quota of the registration. A provider that brought its own runtime would answer
-with another clock, would not use the proxy and the certificate configuration of
-the host, and its quota would not appear in the provider status.
+runtime the provider performs its requests in: the clients the library built,
+the clock the host injected, the configured request timeout and the quota of
+the registration. A provider that brought its own runtime would answer with
+another clock, would not use the proxy and the certificate configuration of the
+library, and its quota would not appear in the provider status.
 
 A registered provider is consulted like every other provider: its requests run
 on the worker thread of the library, its answers are cached under its own
@@ -410,6 +446,7 @@ none sees none of them, and the verdicts are the same either way.
 | `the list was not refreshed because its interval has not elapsed` | `debug` | A refresh finds a publisher that was asked too recently. | the provider, the time that is left |
 | `the list was refreshed` | `info` | A publisher published a list that was downloaded. | the provider, the number of entries |
 | `the list could not be refreshed` | `warn` | The download of a list failed. | the provider, the error |
+| `the upstream did not deliver the document` | `warn` | An answer was not the document of the publisher. | the provider, the URL, the status, the content type, an excerpt of the body |
 
 The library reports its own failures at the level `error`: a verification that
 could not be queued for the worker, a worker thread that could not be started,
@@ -608,6 +645,8 @@ let bots = BadBots::builder().config(config).build()?;
 | `evidence_policy` | `Strict` |
 | `max_concurrent_verifications` | 4 |
 | `cache_capacity` | 10,000 |
+| `client_ca_pem` | none |
+| `proxy` | the proxy of the environment |
 
 The host bounds how long a cached result is reused. An answer that carries
 evidence is reused for at most `positive_ttl`, an answer that carries no

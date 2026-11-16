@@ -80,7 +80,7 @@ async fn provider_for(body: &str) -> (MockServer, CinsProvider) {
     let server = server_for(body).await;
 
     let runtime = Arc::new(ProviderRuntime::new(
-        common::client(),
+        common::clients(),
         daily_guard(1_000),
         Duration::from_secs(5),
         Arc::new(TestClock::new(now())),
@@ -269,7 +269,7 @@ async fn the_configured_refresh_interval_overrides_the_default() {
     let server = server_for(&fixture("cins/ci-badguys.txt")).await;
 
     let runtime = Arc::new(ProviderRuntime::new(
-        common::client(),
+        common::clients(),
         daily_guard(1_000),
         Duration::from_secs(5),
         Arc::new(TestClock::new(now())),
